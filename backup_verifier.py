@@ -340,7 +340,11 @@ def inspect_backup(
         info = {}
 
     print(f"  Device Name:      {info.get('Device Name', 'Unknown')}")
-    print(f"  Product:          {info.get('Product Name', 'Unknown')} ({info.get('Product Type', 'Unknown')})")
+    ptype = info.get("Product Type", "Unknown")
+    # idevicebackup2 doesn't write "Product Name" (Finder does); fall back to the model table.
+    from market_pricing import PRODUCT_TYPE_MAP
+    pname = info.get("Product Name") or PRODUCT_TYPE_MAP.get(ptype, "Unknown")
+    print(f"  Product:          {pname} ({ptype})")
     print(f"  iOS Version:      {info.get('Product Version', 'Unknown')}")
     print(f"  Serial Number:    {info.get('Serial Number', 'Unknown')}")
 
@@ -415,7 +419,7 @@ def inspect_backup(
 
     # --- Folder-name vs Info.plist UDID consistency ---
     info_udid = str((info or {}).get("Unique Identifier") or (info or {}).get("Target Identifier") or "")
-    if info_udid and backup_dir.name and info_udid != backup_dir.name and not ARCHIVE_SUFFIX.search(backup_dir.name):
+    if info_udid and backup_dir.name and info_udid.lower() != backup_dir.name.lower() and not ARCHIVE_SUFFIX.search(backup_dir.name):
         warnings.append(
             f"Info.plist UDID ({info_udid}) does not match folder name ({backup_dir.name})"
         )

@@ -548,5 +548,27 @@ class TestBackupProgress(unittest.TestCase):
         self.assertIn("No backup", out.getvalue())
 
 
+class TestVerifierUdidCase(unittest.TestCase):
+    def test_uppercase_info_plist_udid_is_not_a_mismatch(self):
+        """idevicebackup2 writes the UDID upper-case in Info.plist; the folder is lower-case."""
+        import plistlib
+
+        import backup_verifier
+        with tempfile.TemporaryDirectory() as tmp:
+            from tests.fixtures import create_synthetic_backup
+            b = create_synthetic_backup(Path(tmp))
+            b = b.rename(b.with_name(b.name.lower()))  # real shape: lower-case folder...
+            info = plistlib.loads((b / "Info.plist").read_bytes())
+            info["Unique Identifier"] = b.name.upper()  # ...upper-case UDID in Info.plist
+            (b / "Info.plist").write_bytes(plistlib.dumps(info))
+            with mock.patch.object(backup_verifier, "BACKUP_ROOT", Path(tmp)):
+                import contextlib
+                import io
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    backup_verifier.inspect_backup(b, max_age_hours=1e9, interactive=False)
+        self.assertNotIn("does not match folder name", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
