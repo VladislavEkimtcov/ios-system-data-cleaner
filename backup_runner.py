@@ -7,7 +7,10 @@ Fulfills the 'Smart Friend on the Couch' paradigm:
 2. Real-time PTY stdout parsing for sub-second handshake transition detection:
    - Detects on-screen passcode prompt: plays Ping chime & dispatches macOS notification.
    - Detects passcode acceptance: plays Glass confirmation chime & dispatches macOS notification.
-   - Throttles 50,000 raw progress ticks into crisp 10% milestone reports.
+   - Tracks the phone's own *overall* progress ("NN% Finished"), not the per-batch bars
+     that hit 100% every few seconds, and reports it in 10% milestones.
+   - Heartbeat: bytes copied, speed and ETA in the status file every 30 s, plus a one-line
+     check-in every few minutes (see backup_progress.py and `--watch`).
    - Detects completion: plays Hero chime & dispatches completion notification.
 3. Live persistent state tracking in `.backup_status.json` for agent/CLI monitoring.
 4. Autonomous post-flight verification, APFS CoW snapshotting, and authoritative backup consolidation.
@@ -22,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +40,7 @@ from common import (
     make_prewipe_clone,
     state_path,
 )
+from backup_progress import ProgressEstimator, describe, progress_line, read_status, watch, write_status
 
 REPO_ROOT = Path(__file__).resolve().parent
 # Runtime status lives in the private state dir, never the repo working tree.
@@ -45,6 +50,10 @@ STATUS_FILE = state_path(".backup_status.json")
 PASSCODE_PROMPT_RE = re.compile(r"Waiting for passcode to be entered", re.IGNORECASE)
 RECEIVING_FILES_RE = re.compile(r"Receiving files|Sending .*Status\.plist|Sending .*Manifest\.plist", re.IGNORECASE)
 PROGRESS_RE = re.compile(r"\[\s*={0,}\s*\]\s*(\d+)%\s*(?:\(([^)]+)\))?")
+# The whole-backup progress the phone reports: "[=====      ]  45% Finished". Lines with a
+# "(12.3 MB/45.6 MB)" suffix are per-batch bars and reach 100% many times per backup.
+OVERALL_RE = re.compile(r"\]\s*(\d+(?:\.\d+)?)%\s*Finished")
+HEARTBEAT_SEC = 30.0
 BACKUP_SUCCESS_RE = re.compile(r"Backup Successful\.", re.IGNORECASE)
 ERROR_RE = re.compile(r"ErrorCode \d+:|ERROR:", re.IGNORECASE)
 
@@ -99,7 +108,8 @@ class BackupRunner:
         show_notifications: bool = True,
         authoritative: bool = False,
         status_file: Optional[Path] = None,
-        verbose: bool = True
+        verbose: bool = True,
+        checkin_minutes: float = 5.0,
     ) -> None:
         self.udid = udid
         self.backup_dir = backup_dir or backup_root()
@@ -118,6 +128,16 @@ class BackupRunner:
         self.handshake_confirmed = False
         self.passcode_requested = False
 
+        self.checkin_minutes = checkin_minutes
+        self.overall_percent: Optional[float] = None
+        self.estimated_total_bytes: Optional[int] = None
+        self._baseline_bytes = 0
+        self._estimator: Optional[ProgressEstimator] = None
+        self._status: Dict[str, Any] = {}
+        self._status_lock = threading.Lock()
+        self._run_started = time.time()
+        self._stream_started: Optional[float] = None
+
     def notify(
         self,
         message: str,
@@ -131,21 +151,55 @@ class BackupRunner:
         if self.show_notifications:
             send_notification(message, title=title, subtitle=subtitle)
 
-    def update_status(self, phase: str, **kwargs: Any) -> None:
-        """Persists live execution state to .backup_status.json for agent and CLI observers."""
-        payload = {
-            "phase": phase,
-            "udid": self.udid or "unknown",
-            "device_name": self.device_name,
-            "product_type": self.product_type,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            **kwargs
-        }
-        try:
-            with open(self.status_file, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2)
-        except Exception:
-            pass
+    def update_status(self, phase: Optional[str] = None, **kwargs: Any) -> None:
+        """Persists live state to .backup_status.json for agent and CLI observers.
+
+        Fields accumulate across calls (so progress fields survive a phase change); pass
+        phase=None to refresh fields without changing the phase. Written atomically.
+        """
+        with self._status_lock:
+            if not self._status:
+                self._status["run_started_at"] = datetime.fromtimestamp(
+                    self._run_started, timezone.utc).isoformat()
+            if phase is not None:
+                self._status["phase"] = phase
+            self._status.update({
+                "pid": os.getpid(),
+                "udid": self.udid or "unknown",
+                "device_name": self.device_name,
+                "product_type": self.product_type,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._status.update(kwargs)
+            write_status(self.status_file, dict(self._status))
+
+    def _backup_bytes(self) -> int:
+        from common import dir_size
+        if not self.udid:
+            return 0
+        return dir_size(self.backup_dir / self.udid) or 0
+
+    def _heartbeat(self, stop: threading.Event) -> None:
+        """While copying: bytes, speed and ETA into the status file every HEARTBEAT_SEC, and a
+        one-line check-in on stdout every checkin_minutes."""
+        last_checkin = time.time()
+        while not stop.wait(HEARTBEAT_SEC):
+            if self._status.get("phase") != "streaming" or self._estimator is None:
+                continue
+            written = max(0, self._backup_bytes() - self._baseline_bytes)
+            now = time.time()
+            self._estimator.add(now, written)
+            rate = self._estimator.rate_bps()
+            eta = self._estimator.eta_seconds(self.overall_percent)
+            self.update_status(
+                None,
+                bytes_written=written,
+                rate_bps=round(rate) if rate else None,
+                eta_seconds=round(eta) if eta else None,
+            )
+            if self.checkin_minutes and now - last_checkin >= self.checkin_minutes * 60:
+                last_checkin = now
+                self.log(f"   ⏱  {progress_line(self._status)}")
 
     def log(self, msg: str) -> None:
         if self.verbose:
@@ -208,6 +262,19 @@ class BackupRunner:
         self.log(f"  Target Device:       {self.device_name} ({self.product_type})")
         self.log(f"  UDID:                {self.udid}")
         self.log(f"  iOS Version:         {self.device_info.get('ProductVersion', 'Unknown')}")
+
+        # Rough size of what's coming: the phone's used storage. An upper bound (iCloud-only
+        # photos and app binaries aren't backed up), used for check-ins until the phone's own
+        # overall percentage starts moving.
+        try:
+            usage = run_ideviceinfo("-q", "com.apple.disk_usage")
+            cap = int(usage.get("TotalDataCapacity", 0))
+            avail = int(usage.get("TotalDataAvailable", 0))
+            if cap > avail > 0:
+                self.estimated_total_bytes = cap - avail
+                self.log(f"  Data on Phone:       ~{self.estimated_total_bytes / GB:.1f} GB")
+        except Exception:
+            pass
 
         # 2. Host disk space audit (cross-platform mount)
         import shutil
@@ -294,10 +361,23 @@ class BackupRunner:
         except ImportError:
             pty = None  # type: ignore
 
-        if pty is not None:
-            returncode = self._run_pty(cmd, env, pty, select)
-        else:
-            returncode = self._run_pipe(cmd, env)
+        self._baseline_bytes = self._backup_bytes()  # an incremental backup starts non-empty
+        self._estimator = ProgressEstimator(
+            # For an incremental backup the "full phone" estimate is meaningless; rely on the
+            # phone's own percentage instead.
+            self.estimated_total_bytes if not self._baseline_bytes else None)
+        self.update_status(None, estimated_total_bytes=self.estimated_total_bytes,
+                           incremental=bool(self._baseline_bytes))
+        stop = threading.Event()
+        hb = threading.Thread(target=self._heartbeat, args=(stop,), daemon=True)
+        hb.start()
+        try:
+            if pty is not None:
+                returncode = self._run_pty(cmd, env, pty, select)
+            else:
+                returncode = self._run_pipe(cmd, env)
+        finally:
+            stop.set()
 
         if returncode == 0:
             return True, "Backup payload successfully transferred and assembled."
@@ -375,8 +455,10 @@ class BackupRunner:
         # 2. Handshake Acceptance Check (Passcode entered!)
         elif not self.handshake_confirmed and (RECEIVING_FILES_RE.search(line) or "Finished" in line):
             self.handshake_confirmed = True
+            self._stream_started = time.time()
             self.update_status(
                 "streaming",
+                streaming_started_at=datetime.now(timezone.utc).isoformat(),
                 message="Passcode accepted. Encrypted payload streaming..."
             )
             self.log("\n✅ PASSCODE ACCEPTED!")
@@ -387,28 +469,32 @@ class BackupRunner:
                 subtitle="Handshake Confirmed"
             )
 
-        # 3. Progress Milestone Parsing
-        m_prog = PROGRESS_RE.search(line)
-        if m_prog:
-            pct = int(m_prog.group(1))
-            detail = m_prog.group(2) or ""
-            # Report at 10% milestone boundaries
-            if pct // 10 > self.last_reported_pct // 10 or pct == 100:
-                self.last_reported_pct = pct
+        # 3. Progress Milestone Parsing. Only the phone's overall percentage counts; per-batch
+        # bars ("(x MB/y MB)") are ignored, they hit 100% for every batch of files.
+        m_overall = OVERALL_RE.search(line)
+        m_prog = m_overall or PROGRESS_RE.search(line)
+        if m_overall:
+            pct = float(m_overall.group(1))
+            self.overall_percent = pct
+            if int(pct) // 10 > self.last_reported_pct // 10:
+                prev_quarter = max(self.last_reported_pct, 0) // 25
+                self.last_reported_pct = int(pct)
                 self.update_status(
-                    "streaming",
-                    percent=pct,
-                    detail=detail,
-                    message=f"Backup progress: {pct}% ({detail})"
+                    "streaming" if self.handshake_confirmed else None,
+                    overall_percent=pct,
+                    message=f"Backup progress: {pct:.0f}%",
                 )
-                self.log(f"   [Streaming] {pct:3d}% complete ({detail})")
+                self.log(f"   [Streaming] {pct:3.0f}% of backup done")
+                quarter = int(pct) // 25
+                if 0 < quarter < 4 and quarter > prev_quarter:  # banners at 25/50/75%, not 10x
+                    self.notify(message=f"Backup {quarter * 25}% done.", subtitle="Backup Progress")
 
         # 4. Success Check
-        elif BACKUP_SUCCESS_RE.search(line):
+        if not m_prog and BACKUP_SUCCESS_RE.search(line):
             self.update_status("stream_done", percent=100, message="Backup stream finished.")
 
         # 5. Error Check
-        elif ERROR_RE.search(line):
+        elif not m_prog and ERROR_RE.search(line):
             self._last_error = line
             self.log(f"   [!] Error detected: {line}")
 
@@ -493,6 +579,8 @@ class BackupRunner:
         self.update_status(
             "completed",
             percent=100,
+            overall_percent=100,
+            duration_seconds=round(time.time() - self._run_started),
             is_complete=True,
             message="Authoritative backup verified and secured."
         )
@@ -541,8 +629,21 @@ def main() -> None:
     parser.add_argument("--no-sound", dest="play_audio", action="store_false", help="Disable audio chimes.")
     parser.add_argument("--no-notify", dest="show_notifications", action="store_false", help="Disable macOS notification banners.")
     parser.add_argument("--status-json", type=Path, help="Custom path for .backup_status.json.")
+    parser.add_argument("--checkin-minutes", type=float, default=5.0,
+                        help="Print a progress check-in (GB copied, speed, ETA) this often. 0 disables.")
+    parser.add_argument("--watch", action="store_true",
+                        help="Don't start a backup: follow the running one, printing one line per event "
+                             "(passcode needed, started, check-ins, stalls, done/failed). Exits when it ends.")
+    parser.add_argument("--status", action="store_true",
+                        help="Print a one-off JSON snapshot of the current/last backup and exit.")
 
     args = parser.parse_args()
+
+    if args.status:
+        print(json.dumps(describe(read_status(args.status_json)), indent=2, ensure_ascii=False))
+        sys.exit(0)
+    if args.watch:
+        sys.exit(watch(args.status_json, checkin_minutes=args.checkin_minutes or 5.0))
 
     runner = BackupRunner(
         udid=args.udid,
@@ -550,7 +651,8 @@ def main() -> None:
         play_audio=args.play_audio,
         show_notifications=args.show_notifications,
         authoritative=args.authoritative,
-        status_file=args.status_json
+        status_file=args.status_json,
+        checkin_minutes=args.checkin_minutes,
     )
 
     success = runner.execute()

@@ -136,7 +136,7 @@ class TestMCPStdioRoundTrip(unittest.TestCase):
         lines = [json.loads(l) for l in out.splitlines() if l.strip()]
         by_id = {m["id"]: m for m in lines}
         self.assertEqual(by_id[1]["result"]["serverInfo"]["name"], "ios-system-data-cleaner")
-        self.assertEqual(len(by_id[2]["result"]["tools"]), 14)
+        self.assertEqual(len(by_id[2]["result"]["tools"]), 15)
         # tools/call returned valid JSON-RPC (not corrupted by the tool's prints).
         self.assertIn("content", by_id[3]["result"])
         payload = json.loads(by_id[3]["result"]["content"][0]["text"])

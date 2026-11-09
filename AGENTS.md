@@ -15,7 +15,7 @@ During early development, extreme caution and manual human stops were necessary.
    - When an insurmountable physical gate occurs (e.g., iPhone screen passcode), ring `Ping.aiff` and dispatch a macOS banner: *"Please enter passcode on iPhone screen"*.
    - The sub-second the passcode is accepted, the backup engine automatically rings `Glass.aiff` and dispatches *"Passcode accepted! Streaming payload..."*.
    - The user lounging on the couch gets immediate audio/visual confirmation without ever having to ask *"Did it work?"* or *"Entered, how is it?"*.
-   - Live milestones are tracked in `.backup_status.json` and reported every 10% without terminal token waste.
+   - Live progress (phase, GB copied, the phone's own overall %, speed, ETA, engine liveness) is kept in `.backup_status.json`. Agents follow the **Backup Check-in Protocol** (Rule 4b) instead of reading raw output.
 3. **Check in only for insurmountable physical boundaries**:
    - Tapping "Trust This Computer" or unlocking a device with a biometric/passcode.
      When the phone isn't visible, don't guess: `common.diagnose_connection()` (or the MCP
@@ -132,6 +132,29 @@ Agents operating in this repository must strictly adhere to these 5 golden rules
 * Never poll the user or sleep in manual loops. Use repo primitives:
   * `python3 restorer.py wait --udid <UDID>` — Blocks until the device re-enumerates on the USB bus.
   * `python3 restorer.py stage-finder` — Automatically positions Finder to the restore confirmation state.
+
+### Rule 4b: Backup Check-in Protocol (keep the user in the loop, without noise)
+A backup takes 10-60 minutes. The user is not watching a terminal, so the agent is their window
+into it. Silence reads as "it's broken"; a wall of progress bars reads as noise.
+
+1. **Start the backup, then attach to it as an event stream**:
+   ```bash
+   python3 backup_runner.py --watch            # one line per event; exits when the backup ends
+   ```
+   Run it as a background watcher (e.g. Claude Code's Monitor tool) so each line reaches the
+   agent as it happens. No event-stream support? Poll the MCP tool `get_backup_progress` (or
+   `python3 backup_runner.py --status`) every 1-2 minutes instead, and apply the same rules.
+2. **Say it the moment it changes**:
+   - `waiting_passcode` → tell the user right away: *"Enter your passcode on the iPhone to start the backup."*
+   - `streaming` (first time) → *"Passcode accepted, backup started."* This is the confirmation the user is waiting for; never skip it.
+3. **Check in every ~5 minutes while copying**, with the one-line `summary` (GB copied, %,
+   speed, time left). One line, not a report. `--checkin-minutes` changes the cadence.
+4. **Escalate immediately** on `stalled` (no progress for 3+ minutes: cable, phone locked) or
+   `engine_died` (engine crashed; the phone was not changed, re-run). Relay `summary`.
+5. **Finish with the verdict**: `completed` (verified) or `failed` + reason, then go on to the next step.
+
+The watcher's lines are written for the user; relay them as they are rather than paraphrasing
+them into longer text.
 
 ### Rule 5: Quantifiable Economic ROI Delivery & The Live Market Valuation Protocol
 * Every revival must finish by capturing a `post_restore` snapshot and rendering the comparative ROI report:

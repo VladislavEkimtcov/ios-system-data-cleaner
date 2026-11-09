@@ -359,6 +359,22 @@ def open_app_store_in_simulator(app_query: str, simulator_target: Optional[str] 
         return {"error": str(exc)}
 
 
+def get_backup_progress() -> Dict[str, Any]:
+    """
+    Live status of the running (or last) iPhone backup: phase, GB copied, overall percent,
+    speed, ETA, and whether the engine is still alive or stalled. `summary` is one sentence
+    ready to tell the user.
+
+    Check-in protocol: tell the user right away when `phase` becomes "waiting_passcode"
+    (they must enter the passcode on the phone) and when it becomes "streaming" (backup
+    started). While streaming, check in every ~5 minutes with `summary`. Report
+    `stalled` / `engine_died` immediately. For an event stream instead of polling, run
+    `python3 backup_runner.py --watch`. Read-only.
+    """
+    from backup_progress import describe, read_status
+    return describe(read_status())
+
+
 def drive_itunes_backup(udid: Optional[str] = None) -> Dict[str, Any]:
     """
     Drive iTunes on Windows to take a backup, monitoring until Status.plist reports
@@ -378,7 +394,7 @@ def drive_itunes_backup(udid: Optional[str] = None) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Tool registry (exactly 14; all read-only or human-gated)
+# Tool registry (exactly 15; all read-only or human-gated)
 # ---------------------------------------------------------------------------
 
 ALL_TOOLS: List[Callable[..., Any]] = [
@@ -396,6 +412,7 @@ ALL_TOOLS: List[Callable[..., Any]] = [
     list_backup_apps,
     open_app_store_in_simulator,
     drive_itunes_backup,
+    get_backup_progress,
 ]
 
 
@@ -516,10 +533,10 @@ def _run_stdio_fallback_server() -> None:
 
 
 def _run_selftest() -> int:
-    """Verifies the 14-tool registry, schemas, and a few read-only tools against a fixture."""
+    """Verifies the 15-tool registry, schemas, and a few read-only tools against a fixture."""
     import tempfile
     schemas = [_build_tool_schema(fn) for fn in ALL_TOOLS]
-    assert len(schemas) == 14, f"Expected 14 tools, found {len(schemas)}"
+    assert len(schemas) == 15, f"Expected 15 tools, found {len(schemas)}"
     names = {s["name"] for s in schemas}
     for required in ("verify_backup", "audit_backup_tokens", "get_host_storage_status",
                      "get_storage_roi_report", "run_security_scan", "compact_payload"):

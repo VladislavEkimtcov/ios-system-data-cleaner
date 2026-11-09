@@ -175,7 +175,7 @@ class TestBackupApps(unittest.TestCase):
 
 class TestMCPTools(unittest.TestCase):
     def test_all_tools_schema(self):
-        self.assertEqual(len(ALL_TOOLS), 14)
+        self.assertEqual(len(ALL_TOOLS), 15)
         for fn in ALL_TOOLS:
             schema = _build_tool_schema(fn)
             self.assertEqual(schema["name"], fn.__name__)

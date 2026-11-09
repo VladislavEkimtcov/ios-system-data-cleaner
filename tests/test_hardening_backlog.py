@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -395,6 +396,156 @@ class TestDeviceWindowMatch(unittest.TestCase):
         text = (REPO_ROOT / "restorer.py").read_text()
         self.assertNotIn('if wName contains "iPhone" or wName contains "iPad" then', text)
         self.assertEqual(text.count('.replace("__DEVICE_WINDOW_MATCH__", match)'), 4)
+
+
+class TestBackupProgress(unittest.TestCase):
+    """Users (and their agents) hear "started" right away and get periodic check-ins."""
+
+    def _runner(self, tmp):
+        import backup_runner
+        r = backup_runner.BackupRunner(udid="U1", backup_dir=Path(tmp), status_file=Path(tmp) / "s.json",
+                                       play_audio=False, show_notifications=False, verbose=False)
+        r.notify = mock.Mock()
+        return r
+
+    def test_per_batch_bars_do_not_count_as_overall_progress(self):
+        import backup_progress
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._runner(tmp)
+            r._process_line("Receiving files")
+            r._process_line("[==================================================] 100% (13.6 MB/13.5 MB)")
+            self.assertIsNone(r.overall_percent)
+            r._process_line("[==========                                        ]  21% Finished")
+            st = backup_progress.read_status(Path(tmp) / "s.json")
+        self.assertEqual(r.overall_percent, 21.0)
+        self.assertEqual(st["phase"], "streaming")
+        self.assertEqual(st["overall_percent"], 21.0)
+        self.assertIn("streaming_started_at", st)
+
+    def test_overall_milestones_keep_coming_after_batch_bars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._runner(tmp)
+            r._process_line("Receiving files")
+            seen = []
+            for pct in range(0, 101, 5):
+                r._process_line("[=====] 100% (1.0 MB/1.0 MB)")
+                r._process_line(f"[=====] {pct}% Finished")
+                seen.append(r.last_reported_pct)
+        self.assertEqual(sorted(set(seen)), [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
+        banners = [c.kwargs["message"] for c in r.notify.call_args_list if "done" in c.kwargs.get("message", "")]
+        self.assertEqual(banners, ["Backup 25% done.", "Backup 50% done.", "Backup 75% done."])
+
+    def test_status_fields_survive_phase_changes_and_file_is_valid_json(self):
+        import backup_progress
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._runner(tmp)
+            r.update_status("streaming", bytes_written=5)
+            r.update_status("verifying")
+            st = backup_progress.read_status(Path(tmp) / "s.json")
+        self.assertEqual(st["bytes_written"], 5)
+        self.assertEqual(st["phase"], "verifying")
+        self.assertEqual(st["pid"], os.getpid())
+
+    def test_eta_prefers_phone_percentage_then_bytes(self):
+        import backup_progress
+        e = backup_progress.ProgressEstimator(estimated_total_bytes=10 * 10**9)
+        e.add(0, 0)
+        e.add(100, 10**9)  # 10 MB/s
+        self.assertAlmostEqual(e.rate_bps(), 10**7)
+        self.assertAlmostEqual(e.eta_seconds(None), 900)    # 9 GB left at 10 MB/s
+        self.assertAlmostEqual(e.eta_seconds(20.0), 400)    # 100 s for 20% -> 400 s more
+
+    def test_describe_flags_dead_engine_and_hides_udid(self):
+        import backup_progress
+        st = {"phase": "streaming", "pid": 999999, "udid": "U1",
+              "updated_at": datetime.now(timezone.utc).isoformat()}
+        with mock.patch.object(backup_progress, "pid_alive", return_value=False):
+            d = backup_progress.describe(st)
+        self.assertTrue(d["engine_died"])
+        self.assertIn("stopped unexpectedly", d["summary"])
+        self.assertNotIn("udid", d)
+
+    def test_describe_flags_stall_but_not_while_waiting_for_passcode(self):
+        import backup_progress
+        old = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        with mock.patch.object(backup_progress, "pid_alive", return_value=True):
+            self.assertTrue(backup_progress.describe({"phase": "streaming", "pid": 1, "updated_at": old})["stalled"])
+            self.assertFalse(backup_progress.describe({"phase": "waiting_passcode", "pid": 1,
+                                                       "updated_at": old})["stalled"])
+
+    def test_progress_line(self):
+        import backup_progress
+        line = backup_progress.progress_line({"bytes_written": 12.4e9, "estimated_total_bytes": 27e9,
+                                              "overall_percent": 46, "rate_bps": 31e6, "eta_seconds": 420})
+        self.assertEqual(line, "Backup in progress: 12.4 GB copied of ~27 GB, 46%, 31 MB/s, ~7 min left")
+
+    def test_watch_event_stream(self):
+        """Passcode prompt, "started", periodic check-ins, then done; nothing else."""
+        import io
+
+        import backup_progress
+        now = datetime.now(timezone.utc).isoformat()
+        timeline = [
+            {"phase": "waiting_passcode"},
+            {"phase": "streaming", "streaming_started_at": now},
+            {"phase": "streaming", "bytes_written": 1e9},
+            {"phase": "streaming", "bytes_written": 2e9},
+            {"phase": "streaming", "bytes_written": 3e9},
+            {"phase": "verifying"},
+            {"phase": "completed", "duration_seconds": 1500},
+        ]
+        it = iter(timeline)
+        t = [0.0]
+        out = io.StringIO()
+
+        def status(_path=None):
+            st = dict(next(it, timeline[-1]))
+            st.update(pid=1, updated_at=now)
+            return st
+
+        def sleep(sec):
+            t[0] += 150  # each poll is 2.5 "minutes" apart
+
+        with mock.patch.object(backup_progress, "read_status", side_effect=status), \
+                mock.patch.object(backup_progress, "pid_alive", return_value=True):
+            rc = backup_progress.watch(Path("x"), checkin_minutes=5, out=out, clock=lambda: t[0], sleep=sleep)
+        lines = [ln.split("] ", 1)[1] for ln in out.getvalue().splitlines()]
+        self.assertEqual(rc, 0)
+        self.assertEqual(lines[0], backup_progress.PHASE_LINES["waiting_passcode"])
+        self.assertEqual(lines[1], backup_progress.PHASE_LINES["streaming"])
+        self.assertEqual(sum(1 for ln in lines if ln.startswith("Backup in progress")), 1)
+        self.assertEqual(lines[-2], backup_progress.PHASE_LINES["verifying"])
+        self.assertEqual(lines[-1], "Backup complete and verified (took 25 min).")
+
+    def test_watch_joining_mid_backup_reports_progress(self):
+        import io
+
+        import backup_progress
+        early = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        seq = iter([{"phase": "streaming", "streaming_started_at": early, "bytes_written": 5e9},
+                    {"phase": "failed", "error": "cable pulled"}])
+        out = io.StringIO()
+        with mock.patch.object(backup_progress, "read_status",
+                               side_effect=lambda _p=None: dict(next(seq), pid=1,
+                                                                updated_at=datetime.now(timezone.utc).isoformat())), \
+                mock.patch.object(backup_progress, "pid_alive", return_value=True):
+            rc = backup_progress.watch(Path("x"), out=out, clock=lambda: 0.0, sleep=lambda s: None)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(rc, 1)
+        self.assertIn("5.0 GB copied", lines[0])
+        self.assertIn("FAILED: cable pulled", lines[1])
+
+    def test_watch_with_nothing_running(self):
+        import io
+
+        import backup_progress
+        out = io.StringIO()
+        t = [0.0]
+        with mock.patch.object(backup_progress, "read_status", return_value=None):
+            rc = backup_progress.watch(Path("x"), out=out, clock=lambda: t[0],
+                                       sleep=lambda s: t.__setitem__(0, t[0] + s), wait_for_start_sec=10)
+        self.assertEqual(rc, 2)
+        self.assertIn("No backup", out.getvalue())
 
 
 if __name__ == "__main__":

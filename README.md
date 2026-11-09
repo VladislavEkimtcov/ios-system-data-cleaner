@@ -121,7 +121,7 @@ python3 iphone_manager.py status
 
 ## 🤖 Model Context Protocol (MCP) Server
 
-Includes a built-in 14-tool MCP server (`ios_mcp_server.py`) for AI assistants like Claude Desktop and Antigravity:
+Includes a built-in 15-tool MCP server (`ios_mcp_server.py`) for AI assistants like Claude Desktop and Antigravity:
 
 ```json
 {
@@ -150,6 +150,7 @@ Capabilities exposed to your agent:
 | :--- | :--- |
 | `python3 storage_monitor.py --diff` | Render visual before/after storage bar graphs and household savings ledger. |
 | `python3 backup_runner.py --authoritative` | Autonomous backup engine with sub-second PTY sensory feedback and verification. |
+| `python3 backup_runner.py --watch` | Follow a running backup: one line when it needs your passcode, when it starts, a check-in every 5 min (GB copied, %, speed, ETA), and the result. |
 | `python3 backup_verifier.py --connected` | Run 6-point cryptographic backup audit gate and proof-of-password check. |
 | `python3 iphone_manager.py security` | Anti-Pegasus MVT spyware scan and deep heuristic security audit. |
 | `python3 iphone_manager.py restorer wait` | Detect USB return of an iPhone resetting into Setup Assistant. |
