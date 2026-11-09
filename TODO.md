@@ -84,7 +84,7 @@ only signal.
       up.
 
 ### A10. Duplicated / import-time config
-- [ ] `itunes_env.get_itunes_backup_root` duplicates `common.backup_root` (itunes_env.py
+- [x] `itunes_env.get_itunes_backup_root` duplicates `common.backup_root` (itunes_env.py
       ~53–100). Delete it and import the shared one.
 - [ ] `common.BACKUP_ROOT` is computed at import time and imported by value in many modules.
       Env overrides set after import (MCP server, tests) are silently ignored. Call
@@ -114,9 +114,9 @@ Microsoft Store, or the **Apple Devices** app.
 - [ ] Add `cd /d "%~dp0"` so the script works when launched from another directory.
 
 ### W2. Duplicate keystrokes / duplicate backup triggers
-- [ ] In `send_backup_shortcut`, the PowerShell `SendKeys` fallback runs even when the
+- [x] In `send_backup_shortcut`, the PowerShell `SendKeys` fallback runs even when the
       Windows-MCP shortcut already succeeded, so Alt+F → D → B is sent twice.
-- [ ] `trigger_backup` calls `actuate_backup_ui()` twice (~lines 351 and 393), and
+- [x] `trigger_backup` calls `actuate_backup_ui()` twice (~lines 351 and 393), and
       `actuate_backup_ui` calls `launch_or_focus_itunes` again on top. This can queue two
       backups or leave a menu open.
 
@@ -147,7 +147,7 @@ Microsoft Store, or the **Apple Devices** app.
       `amds_service_running`).
 
 ### W6. Backup root selection
-- [ ] `common.backup_root()` returns the *first* existing candidate (Win32 `%APPDATA%`, Store
+- [x] `common.backup_root()` returns the *first* existing candidate (Win32 `%APPDATA%`, Store
       `%USERPROFILE%\Apple`, `Packages\AppleInc.iTunes*`). If an old iTunes left one folder
       and Apple Devices writes to another, we pick the wrong one. Prefer the candidate that
       contains the target UDID, or the one with the newest `Status.plist`.
@@ -160,7 +160,7 @@ Microsoft Store, or the **Apple Devices** app.
       `PYTHONIOENCODING=utf-8` and `chcp 65001` in `revive.bat`.
 
 ### W8. Small bugs
-- [ ] `itunes_automation.main()` uses `json`, but `json` is only imported under
+- [x] `itunes_automation.main()` uses `json`, but `json` is only imported under
       `if __name__ == "__main__"` (~lines 633/638). That raises NameError when `main()` is
       called through an import. Move the import to the top of the file.
 - [ ] Focusing windows by title substring `"itunes"` plus `SetForegroundWindow` is English-only

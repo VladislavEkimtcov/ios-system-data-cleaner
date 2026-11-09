@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from common import backup_root
+
 
 @dataclass
 class ITunesStatus:
@@ -50,56 +52,9 @@ def get_apple_itunes_download_url() -> str:
     return "https://www.apple.com/itunes/download/win64" if is_64 else "https://www.apple.com/itunes/download/win32"
 
 
-def get_itunes_backup_root() -> Path:
-    """
-    Resolves the official iTunes MobileSync Backup directory.
-
-    Evaluation order:
-    1. IPHONE_BACKUP_DIR environment variable (custom override).
-    2. Classic Win32 iTunes: %APPDATA%/Apple Computer/MobileSync/Backup
-    3. Microsoft Store iTunes: %USERPROFILE%/Apple/MobileSync/Backup
-    4. Store local cache sandbox path.
-    5. Fallback macOS / Unix path.
-    """
-    custom_dir = os.environ.get("IPHONE_BACKUP_DIR")
-    if custom_dir:
-        return Path(custom_dir).expanduser().resolve()
-
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA")
-        userprofile = os.environ.get("USERPROFILE") or str(Path.home())
-        localappdata = os.environ.get("LOCALAPPDATA")
-
-        # 1. Standard Win32 iTunes
-        if appdata:
-            win32_path = Path(appdata) / "Apple Computer" / "MobileSync" / "Backup"
-            if win32_path.exists():
-                return win32_path
-
-        # 2. Store iTunes / modern Apple location
-        store_user_path = Path(userprofile) / "Apple" / "MobileSync" / "Backup"
-        if store_user_path.exists():
-            return store_user_path
-
-        # 3. Store iTunes sandboxed LocalCache
-        if localappdata:
-            packages_dir = Path(localappdata) / "Packages"
-            if packages_dir.exists():
-                try:
-                    for p in packages_dir.glob("AppleInc.iTunes*"):
-                        cand = p / "LocalCache" / "Roaming" / "Apple Computer" / "MobileSync" / "Backup"
-                        if cand.exists():
-                            return cand
-                except Exception:
-                    pass
-
-        # If none exist yet, prefer the classic Win32 iTunes path if APPDATA is present
-        if appdata:
-            return Path(appdata) / "Apple Computer" / "MobileSync" / "Backup"
-        return Path.home() / "Apple Computer" / "MobileSync" / "Backup"
-
-    # macOS / Linux fallback
-    return Path.home() / "Library" / "Application Support" / "MobileSync" / "Backup"
+# Kept as a name for callers/tests; the single implementation lives in common.backup_root
+# (the old copy here had drifted: it ignored MOBILESYNC_BACKUP_DIR).
+get_itunes_backup_root = backup_root
 
 
 def check_itunes_installation() -> ITunesStatus:

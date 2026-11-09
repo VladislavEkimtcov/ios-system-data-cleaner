@@ -11,6 +11,7 @@ Automates iTunes operations that cannot be performed via Apple CLI tools:
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import subprocess
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from backup_verifier import inspect_backup
-from common import BACKUP_ROOT, connected_udids, dir_size, find_tool
+from common import backup_root, connected_udids, dir_size, find_tool
 from itunes_env import check_itunes_installation
 
 try:
@@ -152,7 +153,12 @@ class ITunesAutomation:
             except Exception as exc:
                 print(f"Windows-MCP shortcut failed: {exc}, attempting fallback PowerShell keystrokes...")
 
-        # Fallback via PowerShell SendKeys
+        if sent:
+            # Never also send the SendKeys sequence: a second Alt+F -> D -> B would queue a
+            # duplicate backup or leave the File menu open.
+            return True
+
+        # Fallback via PowerShell SendKeys (only when Windows-MCP is missing or failed)
         ps_script = """
         $wshell = New-Object -ComObject WScript.Shell;
         if ($wshell.AppActivate('iTunes')) {
@@ -166,11 +172,10 @@ class ITunesAutomation:
         """
         try:
             subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], check=False, timeout=5)
-            if not sent:
-                print("Sent keyboard command sequence (File -> Devices -> Back Up) via Windows SendKeys.")
+            print("Sent keyboard command sequence (File -> Devices -> Back Up) via Windows SendKeys.")
             return True
         except Exception:
-            return sent
+            return False
 
     def actuate_backup_ui(self) -> bool:
         """
@@ -180,8 +185,6 @@ class ITunesAutomation:
         confirmed, callers should escalate to an agent via an OS-control MCP (UI Automation
         element lookup by name/role) rather than blind-clicking fixed coordinates.
         """
-        self.launch_or_focus_itunes()
-        time.sleep(1.5)
         return self.send_backup_shortcut()
 
     def detect_device_wipe_state(self, udid: Optional[str] = None) -> Dict[str, Any]:
@@ -202,7 +205,7 @@ class ITunesAutomation:
              - Detects if iTunes displays 'Welcome to Your New iPhone' wizard screen vs Summary view
         """
         from storage_monitor import run_ideviceinfo, decode_data_value
-        from backup_verifier import inspect_backup, BACKUP_ROOT
+        from backup_verifier import inspect_backup
 
         info = run_ideviceinfo()
         dev_udid = info.get("UniqueDeviceID") or udid
@@ -221,7 +224,7 @@ class ITunesAutomation:
         if dev_udid:
             try:
                 from backup_verifier import parse_backup_metadata
-                b_path = BACKUP_ROOT / dev_udid
+                b_path = backup_root(dev_udid) / dev_udid
                 if b_path.exists():
                     backup_meta = parse_backup_metadata(b_path)
                     backup_name = backup_meta.device_name
@@ -342,13 +345,10 @@ class ITunesAutomation:
         4. Detects 'Set Password' dialog if encryption is new, pausing to guide the user.
         5. When encryption is enabled on-device, prevents idevicebackup2 conflicts.
         """
-        self.launch_or_focus_itunes()
-        time.sleep(2)
-
-        # Trigger via UI actuation
+        # Trigger via UI actuation (send_backup_shortcut launches/focuses iTunes itself)
         self.actuate_backup_ui()
 
-        backup_dir = BACKUP_ROOT / udid
+        backup_dir = backup_root(udid) / udid
         print(f"Waiting up to {settling_window_sec}s for backup write activity to register...")
         t_start = time.time()
 
@@ -389,9 +389,12 @@ class ITunesAutomation:
                         pass
                 time.sleep(2.0)
 
-        # Resend backup actuation once more in case iTunes finished window initialization
-        self.actuate_backup_ui()
-        time.sleep(2.5)
+        # Resend backup actuation once more in case iTunes was still initialising its window
+        # on the first attempt. Never resend while a modal dialog is up: the keystrokes would
+        # land in the dialog, and once it is dismissed iTunes would run a second backup.
+        if dialog is None:
+            self.actuate_backup_ui()
+            time.sleep(2.5)
         if backup_dir.exists():
             try:
                 entries = list(os.scandir(str(backup_dir)))
@@ -420,8 +423,9 @@ class ITunesAutomation:
 
         if tool and not is_encrypted:
             print("  ℹ️ iTunes UI idle/dialog detected; engaging direct MobileSync backup daemon...")
-            BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
-            cmd = [str(tool), "-u", udid, "backup", "--full", str(BACKUP_ROOT)]
+            root = backup_root(udid)
+            root.mkdir(parents=True, exist_ok=True)
+            cmd = [str(tool), "-u", udid, "backup", "--full", str(root)]
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -446,7 +450,7 @@ class ITunesAutomation:
         Monitors the local MobileSync backup directory for live byte-level progress.
         Detects backup initiation, growth, and completion via Status.plist SnapshotState == 'finished'.
         """
-        backup_dir = BACKUP_ROOT / udid
+        backup_dir = backup_root(udid) / udid
         start_time = time.time()
         last_size = 0
         unchanged_ticks = 0
@@ -635,6 +639,5 @@ def main():
 
 
 if __name__ == "__main__":
-    import json
     sys.exit(main())
 

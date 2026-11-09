@@ -61,14 +61,80 @@ def state_path(name: str) -> Path:
 # Backup root resolution (honors IPHONE_BACKUP_DIR and MOBILESYNC_BACKUP_DIR)
 # ---------------------------------------------------------------------------
 
-def backup_root() -> Path:
+def windows_backup_root_candidates() -> List[Path]:
+    """All places Windows Apple software may keep MobileSync backups, in preference order.
+
+    Win32 iTunes (%APPDATA%), Store iTunes / Apple Devices (%USERPROFILE%\\Apple), and the
+    sandboxed Store LocalCache. Existence is not checked here.
+    """
+    appdata = os.environ.get("APPDATA")
+    userprofile = os.environ.get("USERPROFILE") or str(Path.home())
+    localappdata = os.environ.get("LOCALAPPDATA")
+
+    cands: List[Path] = []
+    if appdata:
+        cands.append(Path(appdata) / "Apple Computer" / "MobileSync" / "Backup")
+    cands.append(Path(userprofile) / "Apple" / "MobileSync" / "Backup")
+    if localappdata:
+        packages_dir = Path(localappdata) / "Packages"
+        try:
+            for p in sorted(packages_dir.glob("AppleInc.iTunes*")):
+                cands.append(p / "LocalCache" / "Roaming" / "Apple Computer" / "MobileSync" / "Backup")
+        except OSError:
+            pass
+    return cands
+
+
+def _newest_backup_mtime(root: Path, udid: Optional[str] = None) -> float:
+    """Newest Status.plist/Info.plist mtime under root (only root/udid when udid is given)."""
+    dirs: List[Path]
+    if udid:
+        dirs = [root / udid]
+    else:
+        try:
+            dirs = [d for d in root.iterdir() if d.is_dir()]
+        except OSError:
+            return -1.0
+    newest = -1.0
+    for d in dirs:
+        for marker in ("Status.plist", "Info.plist"):
+            try:
+                newest = max(newest, (d / marker).stat().st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
+def select_backup_root(candidates: List[Path], udid: Optional[str] = None) -> Optional[Path]:
+    """Picks the backup root among existing candidates.
+
+    An old iTunes install can leave one folder behind while the Apple Devices app writes to
+    another, so "first existing" is not good enough. Preference:
+      1. a candidate that holds backup <udid> (newest one if several do);
+      2. the candidate holding the most recently written backup;
+      3. the first existing candidate (empty folders, ties).
+    Returns None when no candidate exists.
+    """
+    existing = [c for c in candidates if c.is_dir()]
+    if not existing:
+        return None
+    if udid:
+        holding = [c for c in existing if (c / udid).is_dir()]
+        if holding:
+            return max(holding, key=lambda c: _newest_backup_mtime(c, udid))
+    best = max(existing, key=lambda c: _newest_backup_mtime(c))  # max() keeps the first on ties
+    return best
+
+
+def backup_root(udid: Optional[str] = None) -> Path:
     """
     Resolves the MobileSync/iTunes backup directory.
 
     Order:
       1. IPHONE_BACKUP_DIR (primary override, used by tests)
       2. MOBILESYNC_BACKUP_DIR (documented in .env.example)
-      3. Windows iTunes locations (Win32, Store, sandboxed LocalCache)
+      3. Windows: the existing candidate chosen by select_backup_root (prefers the one that
+         holds `udid`, then the most recently written one), else the Win32 default
       4. macOS / Linux default
     """
     for var in ("IPHONE_BACKUP_DIR", "MOBILESYNC_BACKUP_DIR"):
@@ -77,32 +143,12 @@ def backup_root() -> Path:
             return Path(custom).expanduser().resolve()
 
     if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA")
-        userprofile = os.environ.get("USERPROFILE") or str(Path.home())
-        localappdata = os.environ.get("LOCALAPPDATA")
-
-        if appdata:
-            win32_path = Path(appdata) / "Apple Computer" / "MobileSync" / "Backup"
-            if win32_path.exists():
-                return win32_path
-
-        store_user_path = Path(userprofile) / "Apple" / "MobileSync" / "Backup"
-        if store_user_path.exists():
-            return store_user_path
-
-        if localappdata:
-            packages_dir = Path(localappdata) / "Packages"
-            if packages_dir.exists():
-                try:
-                    for p in packages_dir.glob("AppleInc.iTunes*"):
-                        cand = p / "LocalCache" / "Roaming" / "Apple Computer" / "MobileSync" / "Backup"
-                        if cand.exists():
-                            return cand
-                except OSError:
-                    pass
-
-        if appdata:
-            return Path(appdata) / "Apple Computer" / "MobileSync" / "Backup"
+        cands = windows_backup_root_candidates()
+        chosen = select_backup_root(cands, udid)
+        if chosen is not None:
+            return chosen
+        if os.environ.get("APPDATA"):
+            return cands[0]
         return Path.home() / "Apple Computer" / "MobileSync" / "Backup"
 
     return Path.home() / "Library" / "Application Support" / "MobileSync" / "Backup"

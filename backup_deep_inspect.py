@@ -53,7 +53,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from backup_verifier import BACKUP_ROOT
+from common import backup_root
 
 ICON = {"FLAG": "🚩", "REVIEW": "🔎", "OK": "✅", "INFO": "ℹ️ ", "SKIP": "⏭️ "}
 
@@ -516,7 +516,8 @@ def main() -> int:
         print(f"❌ {report} doesn't look like an MVT check-backup report (no backup_info.json)")
         return 2
 
-    original = BACKUP_ROOT / report.name.removesuffix("_report")
+    udid_name = report.name.removesuffix("_report")
+    original = backup_root(udid_name) / udid_name
     encrypted = None
     try:
         with open(original / "Manifest.plist", "rb") as f:

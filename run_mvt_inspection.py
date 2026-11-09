@@ -42,8 +42,8 @@ import sys
 from pathlib import Path
 
 from backup_deep_inspect import inspect as deep_inspect
-from backup_verifier import ARCHIVE_SUFFIX, BACKUP_ROOT, dir_size, fmt_size
-from common import host_mount
+from backup_verifier import ARCHIVE_SUFFIX, dir_size, fmt_size
+from common import backup_root, host_mount
 
 MVT_WORK_DIR = Path(__file__).resolve().parent / "mvt_reports"  # gitignored; holds sensitive output
 # MVT loads every *.stix2 file in here automatically (see `mvt-ios download-iocs`).
@@ -85,12 +85,13 @@ def read_plist(path: Path) -> dict:
 
 
 def list_backups() -> list[tuple[Path, dict, bool]]:
+    root = backup_root()
     try:
-        dirs = [d for d in BACKUP_ROOT.iterdir() if d.is_dir() and (d / "Manifest.plist").exists()]
+        dirs = [d for d in root.iterdir() if d.is_dir() and (d / "Manifest.plist").exists()]
     except FileNotFoundError:
         return []
     except PermissionError:
-        die(f"Permission denied reading {BACKUP_ROOT}. Grant your terminal Full Disk Access.", 2)
+        die(f"Permission denied reading {root}. Grant your terminal Full Disk Access.", 2)
     out = []
     for d in sorted(dirs, key=lambda x: x.stat().st_mtime, reverse=True):
         info = read_plist(d / "Info.plist")
@@ -102,7 +103,7 @@ def list_backups() -> list[tuple[Path, dict, bool]]:
 def choose_backup(udid: str | None) -> tuple[Path, bool]:
     backups = list_backups()
     if not backups:
-        die(f"No backups found in {BACKUP_ROOT}")
+        die(f"No backups found in {backup_root()}")
 
     if udid:
         match = [b for b in backups if b[0].name == udid]
