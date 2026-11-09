@@ -204,5 +204,62 @@ class TestKeychainEnumeration(unittest.TestCase):
         run.assert_not_called()
 
 
+class _FakeClock:
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps = []
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.t += s
+
+
+class TestWaitUntil(unittest.TestCase):
+    """A7: one condition-wait helper instead of fixed sleeps."""
+
+    def test_immediate_true_does_not_sleep(self):
+        c = _FakeClock()
+        self.assertEqual(common.wait_until(lambda: "ok", 10, clock=c.now, sleep=c.sleep), "ok")
+        self.assertEqual(c.sleeps, [])
+
+    def test_returns_when_condition_becomes_true(self):
+        c = _FakeClock()
+        res = common.wait_until(lambda: c.t >= 2.0 and "ready", 10, 0.5, clock=c.now, sleep=c.sleep)
+        self.assertEqual(res, "ready")
+        self.assertAlmostEqual(c.t, 2.0)
+
+    def test_times_out_without_overshooting(self):
+        c = _FakeClock()
+        self.assertIsNone(common.wait_until(lambda: False, 1.2, 0.5, clock=c.now, sleep=c.sleep))
+        self.assertAlmostEqual(c.t, 1.2)
+
+    def test_predicate_exception_counts_as_not_yet(self):
+        c = _FakeClock()
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) < 3:
+                raise OSError("lockdownd not up")
+            return True
+        self.assertTrue(common.wait_until(flaky, 10, 1, clock=c.now, sleep=c.sleep))
+        self.assertEqual(len(calls), 3)
+
+
+class TestFinderRespawnWait(unittest.TestCase):
+    def test_waits_for_new_pid_not_fixed_sleep(self):
+        import restorer
+        pids = iter(["100", "100", None, "200"])
+        with mock.patch.object(restorer, "_finder_pid", side_effect=lambda: next(pids)), \
+                mock.patch.object(restorer.subprocess, "run") as run, \
+                mock.patch.object(common.time, "sleep") as slp:
+            self.assertTrue(restorer.restart_finder_services(timeout_sec=10, verbose=False))
+        self.assertEqual(slp.call_count, 2)  # two polls, then new PID "200" seen
+        self.assertEqual(run.call_count, 2)  # killall + activate
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -65,6 +65,9 @@ only signal.
       lands). Keep Finder text only as a progress hint.
 
 ### A7. Fixed sleeps instead of condition waits
+- [~] `common.wait_until` added; `restart_finder_services` now waits for a new Finder PID and
+      `launch_or_focus_itunes` waits for the iTunes process. Still fixed: the 2 s iTunes
+      settle (needs W3/UIA to observe readiness), menu-key delays, the 1 s USB-stability gap.
 - [ ] Replace fixed `time.sleep(N)` waits with "poll until condition or timeout":
       restorer.py (`restart_finder_services` sleeps the full timeout, ~185, ~438),
       itunes_automation.py (`launch_or_focus_itunes` 4 s + 5 s + 2 s, menu-key delays,

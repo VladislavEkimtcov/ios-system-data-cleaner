@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common import backup_root, connected_udids, find_tool, make_prewipe_clone
+from common import backup_root, connected_udids, find_tool, make_prewipe_clone, wait_until
 
 
 def get_connected_udids() -> List[str]:
@@ -376,19 +376,33 @@ def stage_finder_restore_selection(
     return {"success": True, "result": res, "selected_backup": selected}
 
 
-def restart_finder_services(timeout_sec: float = 3.0, verbose: bool = True) -> bool:
+def _finder_pid() -> Optional[str]:
+    """PID of the running Finder process, or None."""
+    try:
+        res = subprocess.run(["pgrep", "-x", "Finder"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    pids = res.stdout.split()
+    return pids[0] if res.returncode == 0 and pids else None
+
+
+def restart_finder_services(timeout_sec: float = 10.0, verbose: bool = True) -> bool:
     """
     Auto-healing utility for stuck Finder / AMPDevicesAgent UI.
-    Terminates Finder and the Apple Mobile Device agent to force clean respawn.
+    Terminates Finder and the Apple Mobile Device agent to force clean respawn, then waits
+    (up to timeout_sec) until launchd has brought a *new* Finder process back.
     """
     if verbose:
         print("[*] Auto-Healing: Restarting Finder and AMPDevicesAgent services...")
+    old_pid = _finder_pid()
     try:
         subprocess.run(["killall", "-HUP", "Finder", "AMPDevicesAgent"], capture_output=True, text=True)
     except Exception as e:
         if verbose:
             print(f"[!] Warning during process termination: {e}")
-    time.sleep(timeout_sec)
+    new_pid = wait_until(lambda: (p := _finder_pid()) and p != old_pid and p, timeout_sec, 0.25)
+    if verbose and not new_pid:
+        print(f"[!] Finder did not respawn within {timeout_sec:.0f}s; activating it explicitly.")
     try:
         subprocess.run(["osascript", "-e", 'tell application "Finder" to activate'], capture_output=True, text=True)
         if verbose:
@@ -676,7 +690,7 @@ def main() -> int:
 
     # Subcommand: heal-finder
     p_heal = subparsers.add_parser("heal-finder", help="Auto-heal stuck Finder / AMPDevicesAgent UI by restarting services")
-    p_heal.add_argument("--timeout", type=float, default=3.0, help="Wait timeout in seconds after restart")
+    p_heal.add_argument("--timeout", type=float, default=10.0, help="Max seconds to wait for Finder to respawn")
 
     args = parser.parse_args()
 

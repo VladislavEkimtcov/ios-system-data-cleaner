@@ -20,8 +20,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 GB = 1000 ** 3
 GIB = 1024 ** 3
@@ -152,6 +153,40 @@ def backup_root(udid: Optional[str] = None) -> Path:
         return Path.home() / "Apple Computer" / "MobileSync" / "Backup"
 
     return Path.home() / "Library" / "Application Support" / "MobileSync" / "Backup"
+
+
+# ---------------------------------------------------------------------------
+# Condition waits (instead of fixed sleeps)
+# ---------------------------------------------------------------------------
+
+def wait_until(
+    predicate: Callable[[], Any],
+    timeout: float,
+    interval: float = 0.5,
+    *,
+    clock: Optional[Callable[[], float]] = None,
+    sleep: Optional[Callable[[float], None]] = None,
+) -> Any:
+    """Polls predicate() until it returns a truthy value or `timeout` seconds pass.
+
+    Returns that truthy value, or None on timeout. The predicate is checked immediately
+    and once more at the deadline, so a condition that is already true costs no wait.
+    Exceptions from the predicate count as "not yet".
+    """
+    clock = clock or time.monotonic
+    sleep = sleep or time.sleep
+    deadline = clock() + max(0.0, timeout)
+    while True:
+        try:
+            result = predicate()
+        except Exception:
+            result = None
+        if result:
+            return result
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return None
+        sleep(min(interval, remaining))
 
 
 # Convenience module-level constant computed at import. Code that must observe a

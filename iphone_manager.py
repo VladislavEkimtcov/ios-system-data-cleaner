@@ -820,7 +820,7 @@ def main() -> int:
     rst_audit.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Device UDID.")
 
     rst_heal = rst_sub.add_parser("heal-finder", help="Auto-heal stuck Finder / AMPDevicesAgent UI by restarting services.")
-    rst_heal.add_argument("--timeout", type=float, default=3.0, help="Wait timeout in seconds after restart.")
+    rst_heal.add_argument("--timeout", type=float, default=10.0, help="Max seconds to wait for Finder to respawn.")
 
     p_rst.set_defaults(func=cmd_restorer)
 

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from backup_verifier import inspect_backup
-from common import backup_root, connected_udids, dir_size, find_tool
+from common import backup_root, connected_udids, dir_size, find_tool, wait_until
 from itunes_env import check_itunes_installation
 
 try:
@@ -94,7 +94,7 @@ class ITunesAutomation:
             if self.desktop:
                 try:
                     self.desktop.launch_app("iTunes")
-                    time.sleep(4)
+                    wait_until(self.is_itunes_running, timeout=15, interval=0.5)
                 except Exception:
                     pass
 
@@ -103,9 +103,11 @@ class ITunesAutomation:
                 if sys.platform == "win32":
                     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
                 subprocess.Popen([str(self.itunes_exe)], shell=False, creationflags=flags)
-                time.sleep(5)
+                wait_until(self.is_itunes_running, timeout=20, interval=0.5)
 
-            # Give iTunes extra time to enumerate USB devices
+            # The process being up does not mean its window and USB enumeration are ready,
+            # and nothing observable short of UI Automation (W3) says when they are. Keep a
+            # short settle until that lands.
             time.sleep(2)
 
         # Switch to foreground
