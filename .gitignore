@@ -13,8 +13,7 @@ mvt_reports/*
 storage_snapshots.json
 market_prices.json
 .backup_status.json
-# Broad token-manifest ignore (the original leak was *-tokens-prewipe.json slipping past a
-# narrower *-tokens.json rule): never commit any token manifest or tried-password log.
+# Never commit any token manifest or tried-password log.
 *tokens*.json
 tried_passwords.json
 tried_passwords.txt
@@ -40,9 +39,6 @@ __pycache__/
 
 # Windows native tool downloads
 tools/
-
-# Internal improvement plan — not for publication (references the original leaked values).
-/TODO.md
 
 # Local list of extra forbidden literals for check_pii.py (never published).
 /.pii-forbidden

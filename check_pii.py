@@ -3,9 +3,9 @@
 PII / secret guard (`check_pii.py`).
 
 Scans tracked source and docs for identifier-shaped strings that must never be committed:
-real device UDIDs, Wi-Fi MACs, absolute home-directory paths, and a few known-bad personal
-tokens. Synthetic fixtures and the shipped *.example.* samples are intentionally allowed, as
-is this plan's TODO.md.
+real device UDIDs, Wi-Fi MACs, absolute home-directory paths, and any extra literals listed
+in a local, uncommitted .pii-forbidden file. Synthetic fixtures and the shipped *.example.*
+samples are intentionally allowed.
 
 Exit code 0 = clean, 1 = potential leak found. Used by CI and by contributors:
 
@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 
 # Files/dirs that are allowed to contain synthetic identifier-shaped values.
 SKIP_DIRS = {".git", "tests", "mvt_reports", "__pycache__", "tools", "simulator_apps"}
-SKIP_FILES = {"check_pii.py", "TODO.md"}
+SKIP_FILES = {"check_pii.py"}
 SKIP_SUFFIX_CONTAINS = (".example.",)
 
 SCAN_EXTS = {".py", ".md", ".json", ".bat", ".cfg", ".toml", ".yml", ".yaml"}
@@ -33,9 +33,8 @@ PATTERNS = [
     ("Wi-Fi MAC", re.compile(r"\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")),
     ("home path (unix)", re.compile(r"/Users/(?!<|USERNAME|you\b)[a-z][a-z0-9._-]+/")),
     ("home path (windows)", re.compile(r"C:\\\\Users\\\\(?![<%])[A-Za-z]")),
-    ("institution special-casing", re.compile(r"(?i)\buiuc\b|university of illinois")),
-    # Optional extra forbidden literals (one per line) can be listed in a local, uncommitted
-    # .pii-forbidden file so the specific former account names aren't re-published here.
+    # Personal literals (names, institutions, account handles) go one per line in a local,
+    # uncommitted .pii-forbidden file so the guard itself never re-publishes them.
 ]
 
 _EXTRA_FORBIDDEN = [
