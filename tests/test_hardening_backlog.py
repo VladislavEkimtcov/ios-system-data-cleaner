@@ -381,5 +381,21 @@ class TestDiagnoseConnection(unittest.TestCase):
             self.assertEqual(common.usb_ios_devices(), ["normal", "recovery"])
 
 
+class TestDeviceWindowMatch(unittest.TestCase):
+    """A4: a phone named e.g. "Peach" has no "iPhone" in its Finder window title."""
+
+    def test_custom_and_factory_names(self):
+        import restorer
+        with mock.patch.object(restorer, "device_window_names", return_value=['Bob\'s "Peach"']):
+            m = restorer.device_window_match("U1")
+        self.assertIn('wName is "Bob\'s \\"Peach\\""', m)
+        self.assertIn('wName contains "iPhone"', m)
+
+    def test_scripts_use_the_shared_match(self):
+        text = (REPO_ROOT / "restorer.py").read_text()
+        self.assertNotIn('if wName contains "iPhone" or wName contains "iPad" then', text)
+        self.assertEqual(text.count('.replace("__DEVICE_WINDOW_MATCH__", match)'), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -220,11 +220,50 @@ def wait_for_device_return(
     raise TimeoutError(f"Device {expected_udid} did not reconnect within {timeout_sec} seconds. {hint}")
 
 
-def detect_finder_setup_view() -> Dict[str, Any]:
+def device_window_names(udid: Optional[str] = None) -> List[str]:
+    """Names the device's Finder window may carry.
+
+    Finder titles the window with the device name. A wiped phone shows the factory name
+    ("iPhone"), but a live or freshly restored one shows the user's own name, which need not
+    contain "iPhone" at all. Collects the live DeviceName (ideviceinfo) and the name recorded
+    in the backup's Info.plist.
+    """
+    names: List[str] = []
+    if not udid:
+        udids = connected_udids()
+        udid = udids[0] if len(udids) == 1 else None
+    live = query_device_info(udid).get("DeviceName") if udid else None
+    if live:
+        names.append(live)
+    if udid:
+        try:
+            with open(backup_root(udid) / udid / "Info.plist", "rb") as f:
+                recorded = plistlib.load(f).get("Device Name")
+            if recorded:
+                names.append(str(recorded))
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            pass
+    return list(dict.fromkeys(n.strip() for n in names if n and n.strip()))
+
+
+def _applescript_str(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def device_window_match(udid: Optional[str] = None) -> str:
+    """AppleScript boolean over `wName` that matches the device's Finder window: an exact
+    custom device name, or the factory "iPhone"/"iPad" naming."""
+    clauses = [f"wName is {_applescript_str(n)}" for n in device_window_names(udid)]
+    clauses += ['wName contains "iPhone"', 'wName contains "iPad"']
+    return "(" + " or ".join(clauses) + ")"
+
+
+def detect_finder_setup_view(udid: Optional[str] = None) -> Dict[str, Any]:
     """
     Inspects macOS Finder for an iOS device setup window ('Welcome to your new iPhone').
     Returns UI element status.
     """
+    match = device_window_match(udid)
     script = '''
     tell application "System Events"
         tell process "Finder"
@@ -232,7 +271,7 @@ def detect_finder_setup_view() -> Dict[str, Any]:
             set foundWin to missing value
             repeat with w in winList
                 set wName to name of w
-                if wName contains "iPhone" or wName contains "iPad" then
+                if __DEVICE_WINDOW_MATCH__ then
                     set foundWin to w
                     exit repeat
                 end if
@@ -273,7 +312,7 @@ def detect_finder_setup_view() -> Dict[str, Any]:
             return winName & "|||" & (hasWelcome as text) & "|||" & (radioTexts as string) & "|||" & selectedBackup
         end tell
     end tell
-    '''
+    '''.replace("__DEVICE_WINDOW_MATCH__", match)
     try:
         out = subprocess.check_output(["osascript", "-e", script], text=True).strip()
         if out == "NO_WINDOW":
@@ -297,6 +336,7 @@ def detect_finder_setup_view() -> Dict[str, Any]:
 def stage_finder_restore_selection(
     expected_backup_name: Optional[str] = None,
     require_welcome: bool = True,
+    udid: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Selects 'Restore from this backup' in macOS Finder and clicks Continue — but only on a
@@ -311,7 +351,8 @@ def stage_finder_restore_selection(
       - On any missing element it returns a structured 'agent handoff' result instead of
         clicking something unverified.
     """
-    view = detect_finder_setup_view()
+    match = device_window_match(udid)
+    view = detect_finder_setup_view(udid)
     if not view.get("found"):
         return {"success": False, "reason": "no_window",
                 "handoff": "No Finder iPhone/iPad window found. Bring the device window forward and retry."}
@@ -336,7 +377,7 @@ def stage_finder_restore_selection(
             set foundWin to missing value
             repeat with w in winList
                 set wName to name of w
-                if wName contains "iPhone" or wName contains "iPad" then
+                if __DEVICE_WINDOW_MATCH__ then
                     set foundWin to w
                     exit repeat
                 end if
@@ -366,7 +407,7 @@ def stage_finder_restore_selection(
             end try
         end tell
     end tell
-    '''
+    '''.replace("__DEVICE_WINDOW_MATCH__", match)
     try:
         res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
     except Exception as e:
@@ -502,6 +543,7 @@ def auto_confirm_finder_restore_sheet(
         print(f"[+] Safety Invariants Verified: Exactly 1 device ({actual_udid}), recent encrypted backup ({age_hours:.2f}h old), stable USB link.")
 
     # 4. Trigger AppleScript on Finder sheet
+    match = device_window_match(actual_udid)
     script = '''
     tell application "System Events"
         tell process "Finder"
@@ -509,7 +551,7 @@ def auto_confirm_finder_restore_sheet(
             set targetSheet to missing value
             repeat with w in winList
                 set wName to name of w
-                if wName contains "iPhone" or wName contains "iPad" then
+                if __DEVICE_WINDOW_MATCH__ then
                     try
                         set sList to every sheet of w
                         if (count of sList) > 0 then
@@ -533,7 +575,7 @@ def auto_confirm_finder_restore_sheet(
             end try
         end tell
     end tell
-    '''
+    '''.replace("__DEVICE_WINDOW_MATCH__", match)
     res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
     return {
         "success": (res == "CLICKED_RESTORE"),
@@ -558,6 +600,9 @@ def monitor_restore_progress(
     start = time.time()
     last_status = ""
     reboot_detected = False
+    # Resolved once: the device drops off USB mid-restore, but its backup's Info.plist still
+    # names the window it will come back as.
+    match = device_window_match(expected_udid)
 
     while time.time() - start < timeout_sec:
         # Check Finder status text
@@ -567,7 +612,7 @@ def monitor_restore_progress(
                 set winList to every window
                 repeat with w in winList
                     set wName to name of w
-                    if wName contains "iPhone" or wName contains "iPad" then
+                    if __DEVICE_WINDOW_MATCH__ then
                         try
                             set tList to value of every static text of splitter group 1 of splitter group 1 of w
                             try
@@ -581,7 +626,7 @@ def monitor_restore_progress(
                 return ""
             end tell
         end tell
-        '''
+        '''.replace("__DEVICE_WINDOW_MATCH__", match)
         try:
             status_text = subprocess.check_output(["osascript", "-e", script], text=True).strip()
             if status_text and status_text != last_status:

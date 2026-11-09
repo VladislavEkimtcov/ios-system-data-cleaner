@@ -45,7 +45,7 @@ only signal.
       a handoff.
 
 ### A4. Window identification by `"iPhone"` / `"iPad"` substring
-- [ ] Every Finder script picks the first window whose name contains "iPhone" or "iPad".
+- [x] Every Finder script picks the first window whose name contains "iPhone" or "iPad".
       That breaks for custom device names ("Bob's phone"). It also breaks in
       `monitor_restore_progress` once the restored device gets its custom name back. Match
       the window or sidebar item using the device name from `ideviceinfo` or the backup's
