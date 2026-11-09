@@ -26,6 +26,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import secrets
 import shutil
 import socketserver
@@ -40,7 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common import backup_root, connected_udids, find_tool, keybag_fingerprint, state_path
+from common import ARCHIVE_SUFFIX, backup_root, connected_udids, find_tool, keybag_fingerprint, state_path
 
 HISTORY_JSON = state_path("tried_passwords.json")
 SALT_FILE = state_path(".pw_salt")
@@ -322,26 +323,63 @@ def store_in_keychain(udid: str, password: str) -> Tuple[bool, str]:
         return False, "Keychain not available (macOS only)."
 
 
-def list_keychain_backup_accounts() -> List[str]:
-    """Account names (UDIDs) stored under service 'iOS Backup' in the macOS Keychain."""
+KEYCHAIN_BACKUP_SERVICE = "iOS Backup"
+_ACCT_LINE = re.compile(r'^\s*"acct"<blob>="(.*)"\s*$', re.MULTILINE)
+
+
+def _keychain_item_account(account: Optional[str] = None) -> Optional[str]:
+    """Metadata-only lookup of one 'iOS Backup' item (no -w: the secret is never read,
+    so no authorization prompt). Returns the item's account name, or None if absent."""
+    cmd = ["security", "find-generic-password", "-s", KEYCHAIN_BACKUP_SERVICE]
+    if account:
+        cmd.extend(["-a", account])
     try:
-        out = subprocess.check_output(["security", "dump-keychain"], stderr=subprocess.DEVNULL, text=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except Exception:
+        return None
+    if res.returncode != 0:
+        return None
+    m = _ACCT_LINE.search(res.stdout)
+    return m.group(1) if m else account
+
+
+def _known_udids(root: Optional[Path] = None) -> List[str]:
+    """UDIDs we have a reason to look up: connected devices plus backup folder names."""
+    udids: List[str] = []
+    try:
+        udids.extend(connected_udids())
+    except Exception:
+        pass
+    root = root or backup_root()
+    try:
+        for d in root.iterdir():
+            if d.is_dir() and (d / "Info.plist").exists():
+                udids.append(ARCHIVE_SUFFIX.sub("", d.name))
+    except OSError:
+        pass
+    return udids
+
+
+def list_keychain_backup_accounts(
+    candidate_udids: Optional[List[str]] = None,
+    root: Optional[Path] = None,
+) -> List[str]:
+    """Account names (UDIDs) stored under service 'iOS Backup' in the macOS Keychain.
+
+    Looks up only the UDIDs we know about (candidate_udids, connected devices, backup folder
+    names) plus the first 'iOS Backup' item, each with a metadata-only query. It never runs
+    `security dump-keychain`, which reads every login-keychain item and can raise prompts.
+    """
+    if sys.platform != "darwin":
         return []
-    accounts = []
-    current: Dict[str, str] = {}
-    for line in out.splitlines():
-        line = line.strip()
-        if line.startswith("keychain:"):
-            if current.get("svce") == "iOS Backup" and "acct" in current:
-                accounts.append(current["acct"])
-            current = {}
-        elif line.startswith('"svce"<blob>="'):
-            current["svce"] = line.split('"svce"<blob>="')[1].rstrip('"')
-        elif line.startswith('"acct"<blob>="'):
-            current["acct"] = line.split('"acct"<blob>="')[1].rstrip('"')
-    if current.get("svce") == "iOS Backup" and "acct" in current:
-        accounts.append(current["acct"])
+    wanted = list(candidate_udids or []) + _known_udids(root)
+    accounts: List[str] = []
+    for udid in dict.fromkeys(u for u in wanted if u):
+        if _keychain_item_account(udid):
+            accounts.append(udid)
+    first = _keychain_item_account(None)
+    if first:
+        accounts.append(first)
     return list(dict.fromkeys(accounts))
 
 
@@ -411,7 +449,7 @@ def smart_keychain_probe(
     (True, password, msg). On rejection: navigates to Keychain Access, returns
     (False, None, msg). If none match: (False, None, msg).
     """
-    accounts = list_keychain_backup_accounts()
+    accounts = list_keychain_backup_accounts([udid], root=backup_root_dir)
     candidates: List[Tuple[str, str]] = []
     if udid in accounts:
         candidates.append(("Exact UDID match", udid))

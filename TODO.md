@@ -78,7 +78,7 @@ only signal.
       implementation: NVRAM `obliteration`, factory `DeviceName`, and `PasswordProtected`.
 
 ### A9. Keychain enumeration is too broad
-- [ ] `password_tracker.list_keychain_backup_accounts` runs `security dump-keychain`
+- [x] `password_tracker.list_keychain_backup_accounts` runs `security dump-keychain`
       (~line 328), which reads metadata for every item in the login keychain and can trigger
       prompts. Query only `-s "iOS Backup"`, or keep a list of known UDIDs and look each one
       up.

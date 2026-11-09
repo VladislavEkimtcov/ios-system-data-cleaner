@@ -161,5 +161,48 @@ class TestSelectBackupRoot(unittest.TestCase):
         self.assertEqual(common.select_backup_root([self.a, self.b], udid="NOPE"), self.b)
 
 
+class TestKeychainEnumeration(unittest.TestCase):
+    """A9: targeted metadata lookups only; never `security dump-keychain`, never -w."""
+
+    def _fake_security(self, present):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            acct = cmd[cmd.index("-a") + 1] if "-a" in cmd else (present[0] if present else None)
+            ok = acct in present
+            out = f'keychain: "x"\n    "acct"<blob>="{acct}"\n    "svce"<blob>="iOS Backup"\n' if ok else ""
+            return mock.Mock(returncode=0 if ok else 44, stdout=out)
+        return calls, run
+
+    def test_only_targeted_metadata_queries(self):
+        import password_tracker
+        calls, run = self._fake_security(["AAA", "CCC"])
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(password_tracker.sys, "platform", "darwin"), \
+                mock.patch.object(password_tracker, "connected_udids", return_value=["BBB"]), \
+                mock.patch.object(password_tracker.subprocess, "run", side_effect=run), \
+                mock.patch.object(password_tracker.subprocess, "check_output") as co:
+            root = Path(tmp)
+            for name in ("CCC", "CCC-prewipe"):
+                (root / name).mkdir()
+                (root / name / "Info.plist").write_bytes(b"")
+            accounts = password_tracker.list_keychain_backup_accounts(["AAA"], root=root)
+        co.assert_not_called()
+        self.assertEqual(sorted(accounts), ["AAA", "CCC"])
+        for cmd in calls:
+            self.assertNotIn("dump-keychain", cmd)
+            self.assertNotIn("-w", cmd)
+        looked_up = [c[c.index("-a") + 1] for c in calls if "-a" in c]
+        self.assertEqual(looked_up, ["AAA", "BBB", "CCC"])  # deduped, archive suffix stripped
+
+    def test_non_mac_returns_empty_without_calling_security(self):
+        import password_tracker
+        with mock.patch.object(password_tracker.sys, "platform", "win32"), \
+                mock.patch.object(password_tracker.subprocess, "run") as run:
+            self.assertEqual(password_tracker.list_keychain_backup_accounts(["AAA"]), [])
+        run.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
