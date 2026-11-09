@@ -1,0 +1,34 @@
+[
+  {
+    "timestamp": "2026-11-07T08:50:15+00:00",
+    "tag": "before_reset",
+    "udid": "SAMPLE-IPHONE-UDID-001",
+    "device_name": "Family iPhone",
+    "model": "iPhone10,4",
+    "ios_version": "16.7.16",
+    "total_disk_bytes": 64000000000,
+    "user_partition_bytes": 59136253952,
+    "data_used_bytes": 46875242496,
+    "data_available_bytes": 12261011456,
+    "data_used_gb": 46.88,
+    "data_available_gb": 12.26,
+    "user_partition_gb": 59.14,
+    "used_pct": 79.3
+  },
+  {
+    "timestamp": "2026-11-07T15:39:41+00:00",
+    "tag": "post_restore",
+    "udid": "SAMPLE-IPHONE-UDID-001",
+    "device_name": "Family iPhone",
+    "model": "iPhone10,4",
+    "ios_version": "16.7.16",
+    "total_disk_bytes": 64000000000,
+    "user_partition_bytes": 59136253952,
+    "data_used_bytes": 12116553728,
+    "data_available_bytes": 47019700224,
+    "data_used_gb": 12.12,
+    "data_available_gb": 47.02,
+    "user_partition_gb": 59.14,
+    "used_pct": 20.5
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-11-08T06:18:00+00:00",
+  "models": {
+    "iPhone10,4": {
+      "friendly_name": "iPhone 8",
+      "capacity_gb": 64,
+      "refurb_replacement_usd": 75.0,
+      "retail_upgrade_usd": 799.0,
+      "source": "Swappa ($55-$85) / Back Market ($85-$110) / eBay Refurbished Avg (2026-11)",
+      "last_updated": "2026-11-08T06:18:00+00:00",
+      "confidence": "LIVE_VERIFIED"
+    },
+    "iPhone12,8": {
+      "friendly_name": "iPhone SE (2nd generation)",
+      "capacity_gb": 64,
+      "refurb_replacement_usd": 95.0,
+      "retail_upgrade_usd": 799.0,
+      "source": "Swappa ($75-$95) / Back Market ($99-$108) / eBay Refurbished Avg (2026-11)",
+      "last_updated": "2026-11-08T06:18:00+00:00",
+      "confidence": "LIVE_VERIFIED"
+    },
+    "iPhone13,1": {
+      "friendly_name": "iPhone 12 mini",
+      "capacity_gb": 64,
+      "refurb_replacement_usd": 155.0,
+      "retail_upgrade_usd": 799.0,
+      "source": "Swappa ($120-$170) / Back Market ($150-$200) / eBay Refurbished Avg (2026-11)",
+      "last_updated": "2026-11-08T06:18:00+00:00",
+      "confidence": "LIVE_VERIFIED"
+    }
+  }
+}

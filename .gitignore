@@ -1,0 +1,48 @@
+# =================================================================
+# ios-system-data-cleaner: Workbench & Environment Gitignore
+# =================================================================
+
+# Forensic workbench scaffolding (folder preserved, reports ignored)
+mvt_reports/*
+!mvt_reports/.gitkeep
+
+# Local runtime state now lives in ~/.ios-system-data-cleaner/ (outside the repo). These
+# patterns are belt-and-suspenders in case anything is ever written into the tree.
+.env
+*.env
+storage_snapshots.json
+market_prices.json
+.backup_status.json
+# Broad token-manifest ignore (the original leak was *-tokens-prewipe.json slipping past a
+# narrower *-tokens.json rule): never commit any token manifest or tried-password log.
+*tokens*.json
+tried_passwords.json
+tried_passwords.txt
+
+# Simulator temporary application packages
+simulator_apps/
+
+# Agent scratch directories & local metadata
+.agents/
+
+# Python & compiler artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows native tool downloads
+tools/
+
+# Internal improvement plan — not for publication (references the original leaked values).
+/TODO.md
+
+# Local list of extra forbidden literals for check_pii.py (never published).
+/.pii-forbidden
