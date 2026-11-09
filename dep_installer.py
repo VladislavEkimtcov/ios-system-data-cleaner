@@ -355,6 +355,9 @@ def run_interactive_or_automated_setup(
 
 if __name__ == "__main__":
     import argparse
+
+    from common import ensure_utf8_console
+    ensure_utf8_console()
     parser = argparse.ArgumentParser(description="Automated Dependency Installer for Phone Revival.")
     parser.add_argument("--tools", action="store_true", help="Install native libimobiledevice CLI tools.")
     parser.add_argument("--itunes", action="store_true", help="Install iTunes.")

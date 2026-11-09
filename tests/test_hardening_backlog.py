@@ -261,5 +261,43 @@ class TestFinderRespawnWait(unittest.TestCase):
         self.assertEqual(run.call_count, 2)  # killall + activate
 
 
+class TestUtf8Console(unittest.TestCase):
+    """W7: emoji output must not crash a legacy cp1252/cp437 console."""
+
+    def test_reconfigures_legacy_stream(self):
+        import io
+        buf = io.BytesIO()
+        legacy = io.TextIOWrapper(buf, encoding="cp1252")
+        with mock.patch.object(common.sys, "stdout", legacy), mock.patch.object(common.sys, "stderr", legacy):
+            common.ensure_utf8_console()
+            print("✅ backup verified ━━━", file=legacy)
+            legacy.flush()
+        self.assertIn("✅".encode("utf-8"), buf.getvalue())
+
+    def test_utf8_stream_left_alone(self):
+        stream = mock.Mock(encoding="UTF-8")
+        with mock.patch.object(common.sys, "stdout", stream), mock.patch.object(common.sys, "stderr", stream):
+            common.ensure_utf8_console()
+        stream.reconfigure.assert_not_called()
+
+
+class TestReviveBat(unittest.TestCase):
+    """W1: static checks; the script itself must be exercised on a real Windows box."""
+
+    def setUp(self):
+        self.text = (REPO_ROOT / "revive.bat").read_text()
+
+    def test_no_parse_time_errorlevel_in_blocks(self):
+        code = [ln for ln in self.text.splitlines() if not ln.strip().upper().startswith("REM")]
+        self.assertNotIn("%errorlevel% neq", "\n".join(code).lower())
+
+    def test_runs_from_script_dir_and_probes_python(self):
+        code = "\n".join(ln for ln in self.text.splitlines() if not ln.strip().upper().startswith("REM"))
+        self.assertIn('cd /d "%~dp0"', self.text)
+        self.assertNotIn("where python", code)
+        self.assertIn("py -3 -c", self.text)
+        self.assertIn("chcp 65001", self.text)
+
+
 if __name__ == "__main__":
     unittest.main()

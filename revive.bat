@@ -7,20 +7,32 @@ echo                  IPHONE REVIVAL ASSISTANT (WINDOWS)
 echo ======================================================================
 echo.
 
-REM 1. Check Python
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    where py >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo [!] Python 3 is not detected in your PATH.
-        echo     Please install Python 3 from https://www.python.org or the Microsoft Store.
-        echo.
-        pause
-        exit /b 1
-    )
-    set PY_CMD=py
-) else (
-    set PY_CMD=python
+REM Run from the script's own folder, whatever the caller's current directory is.
+cd /d "%~dp0"
+
+REM UTF-8 console so the pipeline's emoji / box-drawing output does not crash on cp437/cp1252.
+chcp 65001 >nul
+set "PYTHONIOENCODING=utf-8"
+
+REM 1. Find a Python 3.10+ that actually runs.
+REM    `where python` is not enough: it also matches the Microsoft Store "App Execution
+REM    Alias" stub, which opens the Store instead of running Python. So run each candidate.
+REM    `if errorlevel 1` is read at run time (unlike %%errorlevel%% inside a ( ) block).
+set "PY_CMD="
+set "PY_PROBE=import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+py -3 -c "%PY_PROBE%" >nul 2>&1
+if not errorlevel 1 set "PY_CMD=py -3"
+if not defined PY_CMD (
+    python -c "%PY_PROBE%" >nul 2>&1
+    if not errorlevel 1 set "PY_CMD=python"
+)
+if not defined PY_CMD (
+    echo [!] Python 3.10 or newer was not found.
+    echo     Install it from https://www.python.org ^(tick "Add python.exe to PATH"^)
+    echo     or from the Microsoft Store, then run revive.bat again.
+    echo.
+    pause
+    exit /b 1
 )
 
 REM 2. Detect System Architecture (64-bit vs 32-bit)

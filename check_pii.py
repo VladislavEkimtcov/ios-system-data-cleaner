@@ -84,4 +84,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Standalone on purpose (CI runs it before anything else); same fix as
+    # common.ensure_utf8_console for legacy Windows consoles.
+    if hasattr(sys.stdout, "reconfigure") and (sys.stdout.encoding or "").lower().replace("-", "") != "utf8":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())

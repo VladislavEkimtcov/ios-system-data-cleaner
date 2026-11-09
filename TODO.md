@@ -106,15 +106,16 @@ which Apple software is installed for each test: iTunes Win32 installer, iTunes 
 Microsoft Store, or the **Apple Devices** app.
 
 ### W1. `revive.bat` Python detection is broken
-- [ ] The inner `if %errorlevel% neq 0` (lines ~13) sits inside the parenthesised block that
+_Fixed on `hardening/batch-1`; still needs a run on real Windows 10/11 (with and without the Store alias)._
+- [x] The inner `if %errorlevel% neq 0` (lines ~13) sits inside the parenthesised block that
       starts at line 11. `%errorlevel%` there is expanded when the block is parsed, so it
       still holds the failing result of `where python`. If `python` is missing but `py` is
       installed, the script still says "Python 3 is not detected" and exits. Fix with
       `if errorlevel 1` or delayed expansion `!errorlevel!`.
-- [ ] `where python` also matches the Microsoft Store *App Execution Alias* stub in
+- [x] `where python` also matches the Microsoft Store *App Execution Alias* stub in
       `%LOCALAPPDATA%\Microsoft\WindowsApps`, which opens the Store instead of running
       Python. Try `py -3` first, then check that `python --version` really runs.
-- [ ] Add `cd /d "%~dp0"` so the script works when launched from another directory.
+- [x] Add `cd /d "%~dp0"` so the script works when launched from another directory.
 
 ### W2. Duplicate keystrokes / duplicate backup triggers
 - [x] In `send_backup_shortcut`, the PowerShell `SendKeys` fallback runs even when the
@@ -157,7 +158,7 @@ Microsoft Store, or the **Apple Devices** app.
 - [ ] Verify the exact path the Apple Devices app writes to.
 
 ### W7. Console encoding
-- [ ] Emoji and box-drawing output can raise `UnicodeEncodeError` on legacy cp1252/cp437
+- [x] Emoji and box-drawing output can raise `UnicodeEncodeError` on legacy cp1252/cp437
       consoles. In every entry point, call
       `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`, or set
       `PYTHONIOENCODING=utf-8` and `chcp 65001` in `revive.bat`.

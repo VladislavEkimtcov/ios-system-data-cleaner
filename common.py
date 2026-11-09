@@ -34,6 +34,29 @@ PREWIPE_SUFFIX = "-prewipe"
 REPO_ROOT = Path(__file__).resolve().parent
 
 
+def ensure_utf8_console() -> None:
+    """Makes stdout/stderr tolerate emoji and box-drawing characters.
+
+    Legacy Windows consoles (cp1252 / cp437) raise UnicodeEncodeError on the first ✅.
+    Reconfigure to UTF-8 with errors="replace" so output degrades to '?' instead of
+    crashing. No-op where the stream is already UTF-8 or cannot be reconfigured.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if enc == "utf8" or not hasattr(stream, "reconfigure"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
+# Every entry point imports common (directly or through another module), so doing this once
+# here covers them all on Windows.
+if sys.platform == "win32":
+    ensure_utf8_console()
+
+
 # ---------------------------------------------------------------------------
 # Runtime state directory (never inside the repo)
 # ---------------------------------------------------------------------------

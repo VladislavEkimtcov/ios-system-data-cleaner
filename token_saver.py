@@ -427,4 +427,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    from common import ensure_utf8_console
+    ensure_utf8_console()
     sys.exit(main())
