@@ -18,6 +18,9 @@ During early development, extreme caution and manual human stops were necessary.
    - Live milestones are tracked in `.backup_status.json` and reported every 10% without terminal token waste.
 3. **Check in only for insurmountable physical boundaries**:
    - Tapping "Trust This Computer" or unlocking a device with a biometric/passcode.
+     When the phone isn't visible, don't guess: `common.diagnose_connection()` (or the MCP
+     `detect_connected_apple_devices` → `connection`) says whether it's a cable/port problem,
+     a locked phone, a pending or declined Trust prompt, or Recovery mode. Relay its `message`.
    - Entering secret passphrases that the operating system strictly isolates.
    - Confirming the final destructive factory reset on the physical iPhone glass.
 4. **Never stall with open-ended paralysis**: Do not ask *"What should we do next?"* Drive the pipeline forward autonomously from connection to post-restore ROI reporting.

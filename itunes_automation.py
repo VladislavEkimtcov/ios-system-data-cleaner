@@ -629,7 +629,8 @@ def main():
         udids = connected_udids()
         udid = udids[0] if udids else None
     if not udid:
-        print("❌ No iPhone connected via USB. Plug in your phone or pass --udid.", file=sys.stderr)
+        from common import diagnose_connection
+        print(f"❌ {diagnose_connection()['message']} (Or pass --udid.)", file=sys.stderr)
         return 1
 
     if args.monitor:

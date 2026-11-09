@@ -58,7 +58,12 @@ def detect_connected_apple_devices() -> Dict[str, Any]:
     """
     Inspect the host for USB-connected iPhones/iPads via libimobiledevice (idevice_id,
     ideviceinfo), Windows PnP (VID 05AC), or Apple Configurator (cfgutil), returning each
-    device's UDID, ProductType, and OS build. Read-only.
+    device's UDID, ProductType, and OS build. Also returns `connection`: whether the phone is
+    usable and, if not, why (no USB device / charge-only cable, locked, needs 'Trust This
+    Computer', trust declined, recovery mode). When `connection.ready` is false, tell the user
+    `connection.message`; it is the one physical action they need to take.
+    Read-only, except that an unpaired phone is sent a pairing request so its Trust prompt
+    appears.
     """
     detected: List[Dict[str, Any]] = []
     idevice_id_bin = find_tool("idevice_id")
@@ -93,9 +98,14 @@ def detect_connected_apple_devices() -> Dict[str, Any]:
         except Exception:
             pass
 
+    from common import diagnose_connection
+    conn = diagnose_connection()
     return {
         "connected_count": len(detected),
         "connected_devices": detected,
+        # If not ready, relay `connection.message` to the user verbatim: it names the single
+        # physical action needed (data cable, unlock, tap Trust, ...).
+        "connection": {k: conn[k] for k in ("state", "ready", "message", "usb")},
         "available_host_tools": {
             "idevice_id": bool(idevice_id_bin),
             "ideviceinfo": bool(ideviceinfo_bin),

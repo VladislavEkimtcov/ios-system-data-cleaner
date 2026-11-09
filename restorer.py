@@ -215,7 +215,9 @@ def wait_for_device_return(
 
         time.sleep(poll_interval)
 
-    raise TimeoutError(f"Device {expected_udid} did not reconnect within {timeout_sec} seconds.")
+    from common import diagnose_connection
+    hint = diagnose_connection(expected_udid)["message"]
+    raise TimeoutError(f"Device {expected_udid} did not reconnect within {timeout_sec} seconds. {hint}")
 
 
 def detect_finder_setup_view() -> Dict[str, Any]:

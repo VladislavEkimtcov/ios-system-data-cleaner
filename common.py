@@ -294,6 +294,139 @@ def connected_udids() -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Connection diagnosis: "why can't we see the phone?"
+# ---------------------------------------------------------------------------
+
+APPLE_USB_VID = 0x05AC
+# iPhone/iPad/iPod in normal mode enumerate with PIDs 0x1290-0x12FF; recovery and DFU use
+# their own PIDs. Anything else with Apple's VID (keyboards, hubs, displays) is ignored.
+_IOS_NORMAL_PIDS = range(0x1290, 0x1300)
+_IOS_RECOVERY_PIDS = {0x1280, 0x1281, 0x1282, 0x1283}
+_IOS_DFU_PIDS = {0x1222, 0x1227}
+
+CONNECTION_MESSAGES = {
+    "ready": "iPhone connected and trusted.",
+    "tools_missing": "libimobiledevice tools not found. Install them: python3 dep_installer.py --tools",
+    "no_usb_device": "No iPhone on USB. Use a data cable (not charge-only), plug it straight into "
+                     "the computer, and unlock the phone.",
+    "recovery_mode": "An iPhone is attached in Recovery/DFU mode. It can only be restored, not "
+                     "backed up, in this state.",
+    "usb_not_listed": "An iPhone is on USB but the Apple device service can't talk to it yet. Unlock "
+                      "the phone and tap 'Trust' if asked; if that doesn't help, unplug and replug it.",
+    "needs_trust": "Unlock your iPhone and tap 'Trust' on the 'Trust This Computer?' prompt, then "
+                   "enter your passcode.",
+    "locked": "Unlock your iPhone (enter the passcode), then try again.",
+    "trust_denied": "The iPhone's 'Trust This Computer?' prompt was declined. Unplug and replug it, "
+                    "then tap 'Trust'. No prompt? On the phone: Settings > General > Transfer or "
+                    "Reset iPhone > Reset > Reset Location & Privacy.",
+    "lockdown_unreachable": "The iPhone is listed but not answering. Unlock it; if that doesn't help, "
+                            "unplug and replug it.",
+}
+
+
+def usb_ios_devices() -> Optional[List[str]]:
+    """Physically attached iOS devices from the OS USB tree, as modes ('normal', 'recovery',
+    'dfu'). Independent of libimobiledevice and of pairing. None when it can't be determined."""
+    pairs: List[Tuple[int, int]] = []
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["ioreg", "-p", "IOUSB", "-l", "-w0"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            for block in out.split("+-o "):
+                v = re.search(r'"idVendor" = (\d+)', block)
+                pr = re.search(r'"idProduct" = (\d+)', block)
+                if v and pr:
+                    pairs.append((int(v.group(1)), int(pr.group(1))))
+        elif sys.platform.startswith("linux"):
+            for dev in Path("/sys/bus/usb/devices").glob("*"):
+                try:
+                    pairs.append((int((dev / "idVendor").read_text().strip(), 16),
+                                  int((dev / "idProduct").read_text().strip(), 16)))
+                except (OSError, ValueError):
+                    continue
+        elif sys.platform == "win32":
+            from win_tools import detect_apple_pnp_devices
+            for d in detect_apple_pnp_devices():
+                m = re.search(r"VID_05AC&PID_([0-9A-Fa-f]{4})", d.instance_id or "")
+                if m:
+                    pairs.append((APPLE_USB_VID, int(m.group(1), 16)))
+        else:
+            return None
+    except Exception:
+        return None
+    modes: List[str] = []
+    for vid, pid in pairs:
+        if vid != APPLE_USB_VID:
+            continue
+        if pid in _IOS_NORMAL_PIDS:
+            modes.append("normal")
+        elif pid in _IOS_RECOVERY_PIDS:
+            modes.append("recovery")
+        elif pid in _IOS_DFU_PIDS:
+            modes.append("dfu")
+    return modes
+
+
+def _pairing_state(idevicepair: Path, udid: str, prompt_trust: bool) -> str:
+    """Maps `idevicepair validate` (and, when unpaired, `pair`) output to a state name."""
+    def run(cmd: str) -> str:
+        try:
+            res = subprocess.run([str(idevicepair), "-u", udid, cmd], capture_output=True,
+                                 text=True, timeout=15)
+        except Exception:
+            return "ERROR: timeout"
+        return (res.stdout + res.stderr).lower()
+
+    out = run("validate")
+    if "success" in out:
+        return "ready"
+    if "not paired" in out and prompt_trust:
+        out = run("pair")  # raises the "Trust This Computer?" prompt on the phone
+        if "success" in out:
+            return "ready"
+    if "accept the trust dialog" in out or "not paired" in out:
+        return "needs_trust"
+    if "passcode is set" in out:
+        return "locked"
+    if "denied the trust dialog" in out:
+        return "trust_denied"
+    return "lockdown_unreachable"
+
+
+def diagnose_connection(udid: Optional[str] = None, prompt_trust: bool = True) -> Dict[str, Any]:
+    """Explains whether the phone is usable and, if not, the one thing the user should do.
+
+    Returns {"state", "ready", "message", "udids", "usb"}. `state` is a key of
+    CONNECTION_MESSAGES. With prompt_trust (default), an attached but unpaired phone gets a
+    pairing request so the Trust prompt actually appears on its screen.
+    """
+    def result(state: str, udids: List[str], usb: Optional[List[str]]) -> Dict[str, Any]:
+        return {"state": state, "ready": state == "ready", "message": CONNECTION_MESSAGES[state],
+                "udids": udids, "usb": usb}
+
+    udids = connected_udids()
+    usb = usb_ios_devices()
+    if udid:
+        udids = [u for u in udids if u == udid]
+
+    if udids:
+        idevicepair = find_tool("idevicepair")
+        if not idevicepair:
+            return result("ready", udids, usb)  # can't check pairing; don't block on it
+        states = [_pairing_state(idevicepair, u, prompt_trust) for u in udids]
+        bad = [s for s in states if s != "ready"]
+        return result(bad[0] if bad else "ready", udids, usb)
+
+    if not find_tool("idevice_id"):
+        return result("tools_missing", [], usb)
+    if usb and "normal" not in usb:
+        return result("recovery_mode", [], usb)
+    if usb:
+        return result("usb_not_listed", [], usb)
+    return result("no_usb_device", [], usb)
+
+
+# ---------------------------------------------------------------------------
 # Plist / sizing helpers
 # ---------------------------------------------------------------------------
 

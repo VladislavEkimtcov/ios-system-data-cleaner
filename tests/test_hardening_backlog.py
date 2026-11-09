@@ -299,5 +299,87 @@ class TestReviveBat(unittest.TestCase):
         self.assertIn("chcp 65001", self.text)
 
 
+class TestDiagnoseConnection(unittest.TestCase):
+    """Tell the user *why* the phone isn't usable: cable, lock, Trust prompt, recovery."""
+
+    def _diag(self, udids, usb, pair_out=None, tools=True, udid=None):
+        pair_out = pair_out or {}
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd[-1])
+            out = pair_out.get(cmd[-1], "")
+            return mock.Mock(stdout=out, stderr="", returncode=0 if "SUCCESS" in out else 1)
+        tool = (lambda name: Path("/x/" + name)) if tools else (lambda name: None)
+        with mock.patch.object(common, "connected_udids", return_value=udids), \
+                mock.patch.object(common, "usb_ios_devices", return_value=usb), \
+                mock.patch.object(common, "find_tool", side_effect=tool), \
+                mock.patch.object(common.subprocess, "run", side_effect=run):
+            return common.diagnose_connection(udid), calls
+
+    def test_ready(self):
+        d, _ = self._diag(["U1"], ["normal"], {"validate": "SUCCESS: Validated pairing with device U1"})
+        self.assertTrue(d["ready"])
+        self.assertEqual(d["state"], "ready")
+
+    def test_nothing_on_usb_points_at_cable(self):
+        d, _ = self._diag([], [])
+        self.assertEqual(d["state"], "no_usb_device")
+        self.assertIn("charge-only", d["message"])
+
+    def test_on_usb_but_not_listed(self):
+        d, _ = self._diag([], ["normal"])
+        self.assertEqual(d["state"], "usb_not_listed")
+        self.assertIn("Trust", d["message"])
+
+    def test_recovery_mode(self):
+        d, _ = self._diag([], ["recovery"])
+        self.assertEqual(d["state"], "recovery_mode")
+
+    def test_unpaired_phone_gets_pair_request_and_trust_message(self):
+        d, calls = self._diag(["U1"], ["normal"], {
+            "validate": "ERROR: Device U1 is not paired with this host",
+            "pair": "ERROR: Please accept the trust dialog on the screen of device U1, then attempt to pair again.",
+        })
+        self.assertEqual(calls, ["validate", "pair"])
+        self.assertEqual(d["state"], "needs_trust")
+        self.assertIn("Trust This Computer", d["message"])
+
+    def test_pairing_succeeds_after_trust(self):
+        d, _ = self._diag(["U1"], ["normal"], {
+            "validate": "ERROR: Device U1 is not paired with this host",
+            "pair": "SUCCESS: Paired with device U1",
+        })
+        self.assertTrue(d["ready"])
+
+    def test_locked(self):
+        d, _ = self._diag(["U1"], ["normal"], {
+            "validate": "ERROR: Could not validate with device U1 because a passcode is set. "
+                        "Please enter the passcode on the device and retry."})
+        self.assertEqual(d["state"], "locked")
+
+    def test_trust_denied(self):
+        d, _ = self._diag(["U1"], ["normal"], {
+            "validate": "ERROR: Device U1 said that the user denied the trust dialog."})
+        self.assertEqual(d["state"], "trust_denied")
+        self.assertIn("Reset Location & Privacy", d["message"])
+
+    def test_tools_missing(self):
+        d, _ = self._diag([], [], tools=False)
+        self.assertEqual(d["state"], "tools_missing")
+
+    def test_messages_carry_no_udid(self):
+        for msg in common.CONNECTION_MESSAGES.values():
+            self.assertNotIn("%s", msg)
+
+    def test_usb_parsing_ignores_non_ios_apple_devices(self):
+        ioreg = ('+-o Keyboard  {\n  "idVendor" = 1452\n  "idProduct" = 615\n}\n'
+                 '+-o iPhone  {\n  "idVendor" = 1452\n  "idProduct" = 4776\n}\n'
+                 '+-o Thing  {\n  "idVendor" = 1452\n  "idProduct" = 4737\n}\n')
+        with mock.patch.object(common.sys, "platform", "darwin"), \
+                mock.patch.object(common.subprocess, "run", return_value=mock.Mock(stdout=ioreg)):
+            self.assertEqual(common.usb_ios_devices(), ["normal", "recovery"])
+
+
 if __name__ == "__main__":
     unittest.main()

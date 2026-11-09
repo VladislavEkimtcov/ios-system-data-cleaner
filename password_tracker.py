@@ -899,7 +899,9 @@ def main() -> int:
         return 0
 
     if not udid and not args.history:
-        print("❌ No device UDID: plug in a phone, pass --udid, or set TARGET_UDID.", file=sys.stderr)
+        from common import diagnose_connection
+        print(f"❌ No device UDID. {diagnose_connection()['message']} Or pass --udid / set TARGET_UDID.",
+              file=sys.stderr)
         return 2
 
     if args.keychain_check:

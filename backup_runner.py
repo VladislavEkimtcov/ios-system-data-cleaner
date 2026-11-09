@@ -196,7 +196,8 @@ class BackupRunner:
             from storage_monitor import run_ideviceinfo
             info = run_ideviceinfo()
             if not info:
-                return False, "No iOS device detected via USB. Unlock phone and tap Trust Computer."
+                from common import diagnose_connection
+                return False, diagnose_connection(self.udid)["message"]
             self.device_info = info
             self.udid = self.udid or info.get("UniqueDeviceID")
             self.device_name = info.get("DeviceName", "iPhone")

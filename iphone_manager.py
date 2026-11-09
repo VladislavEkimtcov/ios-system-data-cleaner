@@ -230,7 +230,8 @@ def cmd_itunes(args: argparse.Namespace) -> int:
                     udid = p.instance_id[-40:].lower()
                     break
         if not udid:
-            print("❌ No iPhone connected via USB. Please plug in your phone.", file=sys.stderr)
+            from common import diagnose_connection
+            print(f"❌ {diagnose_connection()['message']}", file=sys.stderr)
             return 1
         from itunes_automation import ITunesAutomation
         driver = ITunesAutomation()
@@ -250,7 +251,8 @@ def cmd_itunes(args: argparse.Namespace) -> int:
                     udid = p.instance_id[-40:].lower()
                     break
         if not udid:
-            print("❌ No iPhone connected via USB. Please plug in your phone.", file=sys.stderr)
+            from common import diagnose_connection
+            print(f"❌ {diagnose_connection()['message']}", file=sys.stderr)
             return 1
         from itunes_automation import ITunesAutomation
         driver = ITunesAutomation()
@@ -363,7 +365,8 @@ def cmd_revive(args: argparse.Namespace) -> int:
             print("  Once installed, re-run this command to proceed automatically!")
             return 2
         else:
-            print("  Please unlock your iPhone and tap 'Trust This Computer' if prompted.")
+            from common import diagnose_connection
+            print(f"  👉 {diagnose_connection()['message']}")
             return 1
 
     udid = info.get("UniqueDeviceID")

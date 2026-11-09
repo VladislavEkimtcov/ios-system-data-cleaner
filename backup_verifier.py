@@ -462,7 +462,8 @@ def main() -> int:
     if args.connected:
         udids = connected_udids()
         if not udids:
-            print("❌ No device detected via USB (is it unlocked and trusted?)")
+            from common import diagnose_connection
+            print(f"❌ {diagnose_connection()['message']}")
             return 2
         targets = [d for d in all_dirs if d.name in udids]
         if not targets:

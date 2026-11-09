@@ -441,8 +441,8 @@ def main():
                 print(f"       Driver Status: {d.driver_status}")
             print("  (Note: Install native libimobiledevice CLI tools in ./tools/bin to query iOS internals)")
         else:
-            print("  No iOS device detected via USB.")
-            print("  Make sure device is plugged in, unlocked, and 'Trust This Computer' is accepted.")
+            from common import diagnose_connection
+            print(f"  👉 {diagnose_connection()['message']}")
         print("\n" + "=" * 65)
         return
 
