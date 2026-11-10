@@ -48,6 +48,8 @@ RESTORING = screen(items=[item("W", "static text", value="Restoring from backupâ
 SUMMARY = screen(items=[item("W", "button", "Back Up Now"), item("W", "button", "Restore Backupâ€¦")])
 WRONG_PW = screen(sheet=True, items=[item("S", "static text", value="The password you entered is incorrect."),
                                      item("S", "button", "OK")])
+PW_EMPTY_BUT_ENABLED = screen(sheet=True, items=[item("S", "text field", "", ""), item("S", "button", "Cancel"),
+                                                 item("S", "button", "Restore", enabled=True)])
 MYSTERY = screen(items=[item("W", "static text", value="something new")])
 
 
@@ -214,6 +216,13 @@ class StateMachine(unittest.TestCase):
         run.open_url.assert_called_once_with("http://127.0.0.1:8765/?token=t")   # opened for the person
         self.assertEqual(sum(m.startswith("OFFER_PASSWORD_HELPER") for m in said), 1)
         self.assertIn("opened it in the system browser", [m for m in said if m.startswith("OFFER")][0])
+
+    def test_empty_box_with_enabled_restore_button_is_left_to_the_person(self):
+        run, drv, notes, said = make_run([PW_EMPTY_BUT_ENABLED] * 6 + [PW_TYPED, RESTORING, SUMMARY])
+        code, res = run.drive(900)
+        self.assertEqual(code, 0, res)
+        self.assertEqual(drv.clicks.count(("S", "button", "Restore")), 0)   # never pressed on an empty box
+        self.assertTrue(any("type" in m.lower() for m in said))
 
     def test_repeated_wrong_passwords_launch_and_offer_the_helper_once(self):
         proc = mock.Mock()

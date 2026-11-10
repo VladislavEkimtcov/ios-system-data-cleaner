@@ -300,6 +300,17 @@ def sheet_confirm_button(snap: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _box_filled(snap: Dict[str, Any], btn: Dict[str, Any]) -> bool:
+    """True when the password box really holds something. Finder keeps the Restore button enabled even for an
+    empty box (seen live), so the button alone proves nothing: look at the text field when there is one."""
+    if not btn["enabled"]:
+        return False
+    fields = [it for it in snap["items"] if it["scope"] == "S" and it["cls"] == "text field"]
+    if not fields:
+        return True
+    return any(str(f.get("value") or "").strip() for f in fields)
+
+
 def sheet_text(snap: Dict[str, Any]) -> str:
     return " ".join(_texts(snap, "S"))
 
@@ -536,7 +547,7 @@ class Run:
         t = self.now()
         if self.sheet_first_seen is None:
             self.sheet_first_seen = t
-            self.sheet_prefilled = btn["enabled"]
+            self.sheet_prefilled = _box_filled(snap, btn)
             return None  # the sheet slides in: judge it on the next look, not during the animation
         stable = (t - self.sheet_first_seen) >= 1.5
         waited = self.last_restore_click is None or (t - self.last_restore_click) >= RECLICK_AFTER_SEC
@@ -546,7 +557,7 @@ class Run:
             self.last_restore_click = t
             if res == "CLICKED":
                 self.restore_started = True
-                self.say("The password was already filled in from your Keychain, so I pressed Restore.")
+                self.say("The password box already had a password in it (usually from your Keychain), so I pressed Restore.")
                 self.status(phase="restoring", summary="Restore started in Finder")
                 self.sleep(2.0)
                 return None
