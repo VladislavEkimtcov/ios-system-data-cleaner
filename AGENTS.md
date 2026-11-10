@@ -387,9 +387,9 @@ Screens it knows: no window (opens the phone from the sidebar), activating, **We
    box is empty, the script notifies the person and **only watches** (never click or type for them); the
    restore carries on by itself when they succeed. If Finder says the password is wrong, the script
    dismisses that alert (OK) and keeps watching. After the **second** failure it starts the password
-   helper page in the background and prints `OFFER_PASSWORD_HELPER: ... <link>`: **that line is your
-   cue to offer the person the page** (plain words: "it tries what you remember and common variations";
-   open the link for them only if they say yes). `PASSWORD_FOUND:` means it proved one and saved it to
+   helper page in the background, **opens it itself in the system browser** (the user asked for that), and
+   prints `OFFER_PASSWORD_HELPER:`: tell the person in plain words that the page is open ("it tries what you
+   remember and common variations"). Only if the line says the browser could not be opened, give them the link. `PASSWORD_FOUND:` means it proved one and saved it to
    the Keychain: tell them to type it into the Finder box (Keychain Access, search "iOS Backup"). Never
    type, read or ask for the password yourself.
    **"Done" means the transfer ended, not that the name came back** (observed 2026-11-09): the phone takes

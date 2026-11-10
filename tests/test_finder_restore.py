@@ -89,7 +89,8 @@ def make_run(screens, devices=None, name="Peach", click_results=None, **kw):
     drv = FakeDriver(screens, click_results)
     notes, said = [], []
     run = fr.Run(UDID, dict(PLAN), drv, sleep=clock.sleep, now=clock.now, notify=notes.append, say=said.append,
-                 devices=devices or (lambda: [UDID]), phone_name=lambda: name, finish_timeout=60, **kw)
+                 devices=devices or (lambda: [UDID]), phone_name=lambda: name, finish_timeout=60,
+                 **{"open_url": mock.Mock(return_value=True), **kw})
     return run, drv, notes, said
 
 
@@ -210,7 +211,9 @@ class StateMachine(unittest.TestCase):
         self.assertEqual(drv.clicks.count(("S", "button", "Restore")), 1)   # the Keychain attempt
         self.assertNotIn(("S", "button", "OK"), drv.clicks)                  # never pressed OK on the retry sheet
         launcher.assert_called_once()
+        run.open_url.assert_called_once_with("http://127.0.0.1:8765/?token=t")   # opened for the person
         self.assertEqual(sum(m.startswith("OFFER_PASSWORD_HELPER") for m in said), 1)
+        self.assertIn("opened it in the system browser", [m for m in said if m.startswith("OFFER")][0])
 
     def test_repeated_wrong_passwords_launch_and_offer_the_helper_once(self):
         proc = mock.Mock()
@@ -223,7 +226,8 @@ class StateMachine(unittest.TestCase):
         launcher.assert_called_once()
         offers = [m for m in said if m.startswith("OFFER_PASSWORD_HELPER")]
         self.assertEqual(len(offers), 1)
-        self.assertIn("http://127.0.0.1:8765", offers[0])
+        run.open_url.assert_called_once_with("http://127.0.0.1:8765/?token=t")
+        self.assertIn("opened it in the system browser", offers[0])
         proc.terminate.assert_called()  # cleaned up when the run ends
 
     def test_helper_that_proves_the_password_is_reported(self):

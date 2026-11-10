@@ -349,6 +349,14 @@ def _password_rejected(text: str) -> bool:
 # The password recovery server (offered when the person keeps getting the password wrong)
 # ---------------------------------------------------------------------------
 
+def open_in_system_browser(url: str) -> bool:
+    """Opens the helper page (a local 127.0.0.1 URL) in the Mac's default browser."""
+    try:
+        return subprocess.run(["open", url], capture_output=True, timeout=15).returncode == 0
+    except Exception:
+        return False
+
+
 def launch_password_helper(udid: str, wait_sec: float = 20.0) -> Optional[Tuple[str, Any]]:
     """Starts password_tracker.py's local web page in the background (no browser pop-up: the person is
     OFFERED the link, not surprised by it). Returns (url, process), or None if it didn't come up."""
@@ -394,7 +402,9 @@ class Run:
                  poll: float = POLL_SEC, finish_timeout: float = 1500.0,
                  launch_helper: Optional[Callable[[], Optional[Tuple[str, Any]]]] = None,
                  setup_state: Optional[Callable[[], str]] = None,
-                 restore_active: Optional[Callable[[], bool]] = None):
+                 restore_active: Optional[Callable[[], bool]] = None,
+                 open_url: Optional[Callable[[str], bool]] = None):
+        self.open_url = open_url or open_in_system_browser
         self.udid, self.plan, self.driver = udid, plan, driver
         self.sleep, self.now, self.poll = sleep, now, poll
         self.finish_timeout = finish_timeout
@@ -582,10 +592,20 @@ class Run:
             return
         self.helper_url, self.helper_proc = started
         self.status(password_helper_url=self.helper_url)
-        self.notify("The backup password isn't working. A password helper page is ready; ask the assistant for the link.")
+        opened = self._open_browser(self.helper_url)
+        self.notify("The backup password isn't working. The password helper page is open in your browser." if opened
+                    else "The backup password isn't working. A password helper page is ready; ask the assistant for the link.")
         self.say("OFFER_PASSWORD_HELPER: The backup password hasn't worked a couple of times. I started a password helper "
-                 f"page on this Mac that tries what you remember and common variations: {self.helper_url} . Offer it to "
-                 "the person (open it for them if they say yes). The Finder box keeps waiting meanwhile.")
+                 "page on this Mac that tries what you remember and common variations, and "
+                 + ("opened it in the system browser for the person" if opened
+                    else f"could not open the browser, so offer them this link: {self.helper_url}")
+                 + ". The Finder box keeps waiting meanwhile.")
+
+    def _open_browser(self, url: str) -> bool:
+        try:
+            return bool(self.open_url(url))
+        except Exception:
+            return False
 
     def _check_helper(self) -> None:
         proc = self.helper_proc
