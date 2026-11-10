@@ -44,6 +44,24 @@ class TestCloneHelper(unittest.TestCase):
         self.assertEqual(clone, clone2)
         self.assertFalse((clone / self.backup.name).exists(), "clone must not nest the backup inside itself")
 
+    def test_stale_clone_is_refreshed_not_reused(self):
+        import plistlib
+        from datetime import datetime, timedelta
+        clone = common.make_prewipe_clone(self.backup, verbose=False)
+        # Make the clone look like an older backup, and mark it so we can tell it was replaced.
+        old = datetime.now() - timedelta(hours=4)
+        with (clone / "Status.plist").open("wb") as f:
+            plistlib.dump({"Date": old, "SnapshotState": "finished"}, f)
+        (clone / "STALE_MARKER").write_text("x")
+        with (self.backup / "Status.plist").open("wb") as f:
+            plistlib.dump({"Date": datetime.now(), "SnapshotState": "finished"}, f)
+        clone2 = common.make_prewipe_clone(self.backup, verbose=False)
+        self.assertEqual(clone, clone2)
+        self.assertFalse((clone2 / "STALE_MARKER").exists(), "stale clone must be replaced")
+        self.assertGreater(common._backup_date(clone2), old)
+        # Nothing stray left behind next to the backups.
+        self.assertEqual(sorted(p.name for p in self.root.iterdir() if p.name.startswith(".")), [])
+
     def test_clone_refuses_incomplete_backup(self):
         broken = self.root / "broken"
         broken.mkdir()

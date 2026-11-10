@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+from datetime import datetime
 import re
 import shutil
 import subprocess
@@ -306,7 +307,7 @@ _IOS_DFU_PIDS = {0x1222, 0x1227}
 
 CONNECTION_MESSAGES = {
     "ready": "iPhone connected and trusted.",
-    "tools_missing": "libimobiledevice tools not found. Install them: python3 dep_installer.py --tools",
+    "tools_missing": "The small helper tools that let this Mac talk to the iPhone aren't installed. Run `python3 dep_installer.py --tools` to see your choices (let the agent install them, install them yourself, or use the slower Finder route).",
     "no_usb_device": "No iPhone on USB. Use a data cable (not charge-only), plug it straight into "
                      "the computer, and unlock the phone.",
     "recovery_mode": "An iPhone is attached in Recovery/DFU mode. It can only be restored, not "
@@ -534,12 +535,101 @@ def _plausible_backup(path: Path) -> Tuple[bool, str]:
     return True, "ok"
 
 
+def _backup_date(path: Path) -> Optional[datetime]:
+    """The backup's own completion time (Status.plist `Date`), or None if unreadable."""
+    try:
+        with (path / "Status.plist").open("rb") as f:
+            d = plistlib.load(f).get("Date")
+        return d if isinstance(d, datetime) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _clone_is_current(src: Path, clone: Path) -> bool:
+    """True when the clone holds the same (or a newer) backup than `src`."""
+    s, c = _backup_date(src), _backup_date(clone)
+    if s is None or c is None:
+        return True  # can't tell: keep the existing clone rather than destroy it
+    return c >= s
+
+
+def backup_device_name(info: Dict[str, Any]) -> str:
+    """The phone's real name from a backup's Info.plist. `backup_labels.py` rewrites `Device Name` into a
+    descriptive label for Finder's pop-up and keeps the real name in `Original Device Name`."""
+    return str(info.get("Original Device Name") or info.get("Device Name") or "")
+
+
+FACTORY_DEVICE_NAMES = {"iphone", "ipad", "ipod touch", "ipod"}
+
+
+def _parse_kv(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for line in text.splitlines():
+        if ": " in line:
+            k, v = line.split(": ", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _ideviceinfo(udid: Optional[str], *extra: str) -> Dict[str, str]:
+    tool = find_tool("ideviceinfo")
+    if not tool:
+        return {}
+    cmd = [str(tool)] + (["-u", udid] if udid else []) + list(extra)
+    try:
+        return _parse_kv(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=10))
+    except (OSError, subprocess.SubprocessError):
+        return {}
+
+
+def device_setup_verdict(udid: Optional[str] = None) -> Dict[str, Any]:
+    """Is the phone sitting at the Hello / Setup Assistant screen right now?
+
+    Returns {"verdict": "hello" | "set_up" | "unknown", "reasons": [...], ...}.
+
+    The phone's own `SetupState` (com.apple.purplebuddy) is authoritative: any value means the
+    phone is already set up. The NVRAM `obliteration` record is NOT proof of anything on its own,
+    because it survives a restore, and `PasswordProtected` is unreliable. "hello" needs the
+    setup state to be empty AND positive evidence of a fresh erase. Everything ambiguous is
+    "unknown", which callers must treat as "do not restore".
+    """
+    info = _ideviceinfo(udid)
+    if not info:
+        return {"verdict": "unknown", "reasons": ["the phone did not answer"], "udid": udid}
+    setup_state = _ideviceinfo(udid, "-q", "com.apple.purplebuddy").get("SetupState", "")
+    name = info.get("DeviceName", "")
+    activation = info.get("ActivationState", "")
+    oblit = info.get("obliteration", "")
+    base = {"setup_state": setup_state, "device_name": name, "activation_state": activation,
+            "udid": info.get("UniqueDeviceID", udid), "product_type": info.get("ProductType", ""),
+            "product_version": info.get("ProductVersion", "")}
+    if setup_state:
+        return {**base, "verdict": "set_up", "reasons": [f"the phone reports it is set up ({setup_state})"]}
+    # Positive evidence of a fresh erase: the factory name, or a phone that is not activated yet.
+    # The NVRAM erase record is only supporting detail: it survives a restore, and a restored phone
+    # can report an empty SetupState (seen 2026-11-09: named "Яблоко", Finder on its Summary page,
+    # erase record present), so on its own it must never read as "Hello".
+    strong: List[str] = []
+    if name.strip().lower() in FACTORY_DEVICE_NAMES:
+        strong.append("the phone has its factory name")
+    if activation and activation != "Activated":
+        strong.append(f"activation state is {activation}")
+    if not strong:
+        why = "no setup state, but also no sign of a fresh erase"
+        if oblit:
+            why = "it has an erase record, but that survives a restore, and the phone has its own name and is activated"
+        return {**base, "verdict": "unknown", "reasons": [why]}
+    return {**base, "verdict": "hello", "reasons": strong + (["the phone has an erase record"] if oblit else [])}
+
+
 def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
     """
     Creates an immutable ``<src>-prewipe`` safety clone, atomically and idempotently.
 
-    - Never nests a copy inside an existing clone: if the final clone already exists and
-      verifies, it is kept as-is (immutable) and returned unchanged.
+    - Never nests a copy inside an existing clone: if the final clone already exists,
+      verifies and is as new as the source backup, it is kept as-is (immutable). A clone
+      of an OLDER backup is refreshed (new clone built and verified first, then swapped in),
+      because restoring from a stale safety copy would silently lose recent data.
     - Clones to a temp sibling first, verifies the plists and a non-empty Manifest.db,
       then swaps it into place with an atomic rename.
     - Uses APFS copy-on-write (``cp -c``) on macOS when possible, robocopy on Windows,
@@ -557,12 +647,14 @@ def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
     final = src.parent / f"{src.name}{PREWIPE_SUFFIX}"
     if final.exists():
         ok, why = _plausible_backup(final)
-        if ok:
+        if ok and _clone_is_current(src, final):
             if verbose:
                 print(f"  ✅ Pre-wipe clone already present and valid: {final.name} (kept immutable)")
             return final
-        # Present but broken: remove so we can re-create cleanly.
-        shutil.rmtree(final, ignore_errors=True)
+        if not ok:
+            # Present but broken: remove so we can re-create cleanly.
+            shutil.rmtree(final, ignore_errors=True)
+        # else: valid but stale; it stays in place until the fresh clone is verified.
 
     # Free-space check for the worst case (a full copy).
     src_bytes = dir_size(src) or 0
@@ -598,7 +690,10 @@ def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
         if not ok:
             raise CloneError(f"cloned copy failed verification ({why})")
 
-        # Atomic swap into place.
+        # Swap into place. A stale clone is moved aside (inside tmp, deleted afterwards)
+        # only now that its replacement is verified.
+        if final.exists():
+            os.replace(str(final), str(tmp / "stale"))
         os.replace(str(staging), str(final))
     except CloneError:
         shutil.rmtree(tmp, ignore_errors=True)

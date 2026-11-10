@@ -668,6 +668,8 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
     target_udid: str = ""
     session_token: str = ""
     allowed_hosts: Tuple[str, ...] = ()
+    # Set the moment any password (typed, a variant, or a Keychain probe) is cryptographically proven.
+    proven: threading.Event = threading.Event()
 
     def log_message(self, *args):
         return
@@ -740,6 +742,7 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
             save_attempt(self.target_udid, pwd, success, dur, keybag_fp=kb_fp)
             if success:
                 store_in_keychain(self.target_udid, pwd)
+                self.proven.set()
             self._json({"success": success, "duration_sec": round(dur, 2), "already_tried": bool(prior)})
 
         elif path == "/api/variants":
@@ -754,6 +757,7 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
                     if ok:
                         matched = True
                         store_in_keychain(self.target_udid, v)
+                        self.proven.set()
                         break
             except ProofToolUnavailable as e:
                 self._json({"error": str(e)}); return
@@ -764,6 +768,8 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
                 ok, _pwd, msg = smart_keychain_probe(self.target_udid, interactive=False)
             except ProofToolUnavailable as e:
                 self._json({"error": str(e)}); return
+            if ok:
+                self.proven.set()
             self._json({"success": ok, "message": msg})
 
         elif path == "/api/clear":
@@ -779,18 +785,30 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
 
-def launch_web_ui(udid: str, port: int = 8765):
-    """Launches the localhost web UI with a fresh per-session token and Host allowlist."""
+def launch_web_ui(udid: str, port: int = 8765, exit_on_success: bool = False,
+                  timeout_minutes: float = 30.0, open_browser: bool = True) -> bool:
+    """Launches the localhost web UI with a fresh per-session token and Host allowlist.
+
+    With exit_on_success (for agents) it stops itself a moment after a password is proven,
+    prints `PROOF_OK`, and returns True; it returns False on timeout. Otherwise it serves
+    until Ctrl+C and returns whether a password was proven.
+    """
     token = secrets.token_urlsafe(32)
     PasswordServerHandler.target_udid = udid
     PasswordServerHandler.session_token = token
+    PasswordServerHandler.proven = threading.Event()
 
     socketserver.TCPServer.allow_reuse_address = True
-    try:
-        httpd = socketserver.TCPServer(("127.0.0.1", port), PasswordServerHandler)
-    except OSError:
-        port += 1
-        httpd = socketserver.TCPServer(("127.0.0.1", port), PasswordServerHandler)
+    httpd = None
+    for candidate in range(port, port + 10):  # first free port at or after the requested one
+        try:
+            httpd = socketserver.TCPServer(("127.0.0.1", candidate), PasswordServerHandler)
+            port = candidate
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        raise OSError(f"no free port in {port}-{port + 9}")
 
     PasswordServerHandler.allowed_hosts = (f"127.0.0.1:{port}", f"localhost:{port}")
     url = f"http://127.0.0.1:{port}/?token={token}"
@@ -799,16 +817,36 @@ def launch_web_ui(udid: str, port: int = 8765):
     print("=======================================================")
     print(f"  Target Device:  {udid}")
     print(f"  Web Interface:  {url}")
-    print("  (Bound to 127.0.0.1 with a one-time session token.)")
-    print("=======================================================\n")
-    webbrowser.open(url)
-    print("[*] Server running. Press Ctrl+C to stop.")
+    print("  (Only reachable from this Mac, with a one-time session token.)")
+    print("=======================================================\n", flush=True)
+    if open_browser:
+        webbrowser.open(url)
+
+    if not exit_on_success:
+        print("[*] Server running. Press Ctrl+C to stop.")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\n[+] Password prover stopped.")
+        finally:
+            httpd.server_close()
+        return PasswordServerHandler.proven.is_set()
+
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    print(f"[*] Waiting for a correct password (up to {timeout_minutes:g} min)...", flush=True)
     try:
-        httpd.serve_forever()
+        ok = PasswordServerHandler.proven.wait(timeout=timeout_minutes * 60)
+        if ok:
+            time.sleep(2.0)  # let the page show its success message before the server goes away
     except KeyboardInterrupt:
-        print("\n[+] Password prover stopped.")
+        ok = False
     finally:
+        httpd.shutdown()
         httpd.server_close()
+    print("PROOF_OK: password proven and saved to your Keychain." if ok else
+          "PROOF_TIMEOUT: no correct password was entered.", flush=True)
+    return ok
 
 
 def launch_cli_interactive(udid: str):
@@ -881,6 +919,10 @@ def main() -> int:
     parser.add_argument("--udid", help="Target device UDID (defaults to the connected device).")
     parser.add_argument("--cli", action="store_true", help="Interactive CLI instead of web UI.")
     parser.add_argument("--port", type=int, default=8765, help="Web UI port (default: 8765).")
+    parser.add_argument("--exit-on-success", action="store_true",
+                        help="Web UI stops by itself once a correct password is proven (exit 0; 1 on timeout). For agents.")
+    parser.add_argument("--timeout-minutes", type=float, default=30.0, help="With --exit-on-success: give up after this long.")
+    parser.add_argument("--no-browser", action="store_true", help="Print the web UI link instead of opening a browser.")
     parser.add_argument("--check", help="Test a single password non-interactively (reads from stdin if '-').")
     parser.add_argument("--history", action="store_true", help="Print attempt history (hashed; no plaintext).")
     parser.add_argument("--variants", help="Generate and test variations for a root string.")
@@ -955,7 +997,10 @@ def main() -> int:
     if args.cli:
         launch_cli_interactive(udid)
     else:
-        launch_web_ui(udid, port=args.port)
+        ok = launch_web_ui(udid, port=args.port, exit_on_success=args.exit_on_success,
+                           timeout_minutes=args.timeout_minutes, open_browser=not args.no_browser)
+        if args.exit_on_success:
+            return 0 if ok else 1
     return 0
 
 

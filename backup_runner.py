@@ -541,6 +541,8 @@ class BackupRunner:
         try:
             prewipe_clone = make_prewipe_clone(target_backup, verbose=False)
             self.log(f"  ✅ Immutable Safety Clone:    {prewipe_clone.name}")
+            from backup_labels import ensure_labels
+            ensure_labels(self.udid, say=lambda m: self.log(f"  🏷️  {m}"))   # distinct names in Finder's restore pop-up
         except CloneError as e:
             self.notify("Safety clone failed; refusing to prune.", sound="Basso")
             self.update_status("failed", message=f"clone failed: {e}")

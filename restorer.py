@@ -4,8 +4,11 @@ iPhone Revival Restorer & Setup State Automation (`restorer.py`).
 Provides automated detection and restoration orchestration for iPhones resetting
 back into setup mode ('Hello' screen):
   1. USB Reconnection & Setup State Detector (`wait_for_device_return`)
-  2. Finder Welcome/Restore UI Automator (`detect_finder_setup_view`, `stage_finder_restore`)
-  3. Restore Progress Monitor (`monitor_restore_progress`)
+  2. Finder activation of an erased phone (`activate_via_finder`)
+  3. The restore itself lives in `finder_restore.py` (`restorer.py ui-restore`): a deterministic
+     state machine over Finder's UI that hands off to the agent when a step goes wrong. The
+     older `stage_finder_restore_selection` / `auto_confirm_finder_restore_sheet` /
+     `monitor_restore_progress` helpers below are low-level debugging aids; don't use them for a real restore.
   4. Post-Restore Verification & Storage Delta Tracker (`audit_post_restore_storage`)
 """
 
@@ -238,7 +241,8 @@ def device_window_names(udid: Optional[str] = None) -> List[str]:
     if udid:
         try:
             with open(backup_root(udid) / udid / "Info.plist", "rb") as f:
-                recorded = plistlib.load(f).get("Device Name")
+                from common import backup_device_name
+                recorded = backup_device_name(plistlib.load(f))
             if recorded:
                 names.append(str(recorded))
         except (OSError, plistlib.InvalidFileException, ValueError):
@@ -253,7 +257,8 @@ def _applescript_str(value: str) -> str:
 def device_window_match(udid: Optional[str] = None) -> str:
     """AppleScript boolean over `wName` that matches the device's Finder window: an exact
     custom device name, or the factory "iPhone"/"iPad" naming."""
-    clauses = [f"wName is {_applescript_str(n)}" for n in device_window_names(udid)]
+    # starts-with: device names may carry trailing whitespace that Finder keeps in the title
+    clauses = [f"wName starts with {_applescript_str(n)}" for n in device_window_names(udid)]
     clauses += ['wName contains "iPhone"', 'wName contains "iPad"']
     return "(" + " or ".join(clauses) + ")"
 
@@ -331,6 +336,119 @@ def detect_finder_setup_view(udid: Optional[str] = None) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"found": False, "error": str(e)}
+
+
+def finder_window_titles() -> List[str]:
+    """Titles of the Finder windows that are actually open right now."""
+    try:
+        out = subprocess.check_output(
+            ["osascript", "-e", 'tell application "Finder" to get name of every Finder window'],
+            text=True, timeout=10).strip()
+    except Exception:  # noqa: BLE001
+        return []
+    return [t.strip() for t in out.split(", ")] if out else []
+
+
+def select_device_in_finder(udid: Optional[str] = None) -> Dict[str, Any]:
+    """Opens a Finder window and tries to open the phone from the sidebar (row found by name through
+    the accessibility tree, no hard-coded coordinates). Opening the phone in Finder is what makes
+    the Mac activate an unactivated phone. Never clicks Continue or any setup choice.
+
+    Scripted clicks only highlight a sidebar row on some macOS versions, so success is verified
+    (a Finder window must really be showing the phone). If not, returns a structured `handoff`
+    with the row's live position for an agent (vision click) or the person.
+    """
+    names = list(dict.fromkeys(n for n in device_window_names(udid) + ["iPhone", "iPad"] if n))
+    wanted = "{" + ", ".join(_applescript_str(n) for n in names) + "}"
+    script = f'''
+    set wanted to {wanted}
+    tell application "Finder"
+        activate
+        if (count of Finder windows) is 0 then make new Finder window
+    end tell
+    delay 0.5
+    tell application "System Events" to tell process "Finder"
+        set sb to outline 1 of scroll area 1 of splitter group 1 of window 1
+        repeat with r in rows of sb
+            try
+                set t to value of static text 1 of UI element 1 of r
+                if wanted contains (t as text) then
+                    set p to position of r
+                    set sz to size of r
+                    click at {{(item 1 of p) + 40, (item 2 of p) + ((item 2 of sz) / 2)}}
+                    return "ROW|||" & (t as text) & "|||" & (item 1 of p) & "|||" & (item 2 of p) & "|||" & (item 1 of sz) & "|||" & (item 2 of sz)
+                end if
+            end try
+        end repeat
+        return "NOT_FOUND"
+    end tell
+    '''
+    try:
+        out = subprocess.check_output(["osascript", "-e", script], text=True, stderr=subprocess.STDOUT, timeout=30).strip()
+    except Exception as e:  # noqa: BLE001
+        return {"success": False, "reason": f"Finder scripting failed: {e}"}
+    if not out.startswith("ROW"):
+        return {"success": False, "reason": "The phone isn't listed in Finder's sidebar yet"}
+    _, row, x, y, w, h = out.split("|||")
+    if wait_until(lambda: any(t in names for t in finder_window_titles()), timeout=4.0, interval=0.5):
+        return {"success": True, "row": row}
+    try:
+        cx, cy = int(float(x) + float(w) / 2), int(float(y) + float(h) / 2)
+    except ValueError:
+        cx = cy = None
+    return {"success": False, "reason": "Finder highlighted the phone but didn't open it",
+            "handoff": {"reason": "agent_handoff", "action": f"click the '{row}' row under Locations in the Finder sidebar",
+                        "position_points": [cx, cy], "verify": "Finder shows the phone with 'Activating…' or a Welcome view"}}
+
+
+def close_device_windows(udid: Optional[str] = None) -> int:
+    """Closes Finder windows showing the phone (matched by the device's names). Used once the
+    phone is activated, when Finder is no longer needed. Leaves the person's other windows alone."""
+    names = list(dict.fromkeys(n for n in device_window_names(udid) + ["iPhone", "iPad"] if n))
+    wanted = "{" + ", ".join(_applescript_str(n) for n in names) + "}"
+    script = f'''
+    set wanted to {wanted}
+    set closed to 0
+    tell application "Finder"
+        repeat with w in (reverse of (get every Finder window))
+            try
+                if wanted contains (name of w as text) then
+                    close w
+                    set closed to closed + 1
+                end if
+            end try
+        end repeat
+    end tell
+    return closed
+    '''
+    try:
+        return int(subprocess.check_output(["osascript", "-e", script], text=True, timeout=15).strip() or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def activate_via_finder(udid: str, timeout_sec: int = 180, verbose: bool = True) -> Dict[str, Any]:
+    """Consented Finder step: the command-line tools can't activate a phone, but the Mac does it
+    itself once the phone is opened in Finder. Waits for ActivationState == Activated."""
+    def state() -> str:
+        return query_device_info(udid).get("ActivationState", "")
+
+    if state() == "Activated":
+        close_device_windows(udid)
+        return {"success": True, "already_activated": True}
+    sel = select_device_in_finder(udid)
+    if not sel.get("success"):
+        return {"success": False, "reason": sel.get("reason"), "handoff": sel.get("handoff"),
+                "message": "Finder needs one click to start activating the phone: click the iPhone under "
+                           "Locations in Finder's sidebar (I can do it for you). The Mac then activates it by itself."}
+    if verbose:
+        print("[*] Opened the phone in Finder; the Mac is activating it (about a minute)...")
+    ok = wait_until(lambda: state() == "Activated", timeout=timeout_sec, interval=3.0)
+    if ok:
+        time.sleep(1.5)  # let Finder finish painting its Welcome view, then it is no longer needed
+        close_device_windows(udid)
+    return {"success": bool(ok), "message": "The phone is activated." if ok else
+            "The phone is still activating. Make sure the Mac is online and give it a few more minutes."}
 
 
 def stage_finder_restore_selection(
@@ -736,8 +854,21 @@ def main() -> int:
     p_audit.add_argument("--udid", default=default_udid, help="Target device UDID")
 
     # Subcommand: heal-finder
+    # Subcommand: activate (consented Finder step that makes the Mac activate an unactivated phone)
+    p_act = subparsers.add_parser("activate", help="Open the phone in Finder so the Mac activates it (needs the person's OK)")
+    p_act.add_argument("--udid", default=default_udid, help="Target device UDID")
+    p_act.add_argument("--timeout", type=int, default=180, help="Seconds to wait for activation")
+
+    # Subcommand: ui-restore (THE restore: deterministic Finder UI driving, agent handoff on trouble)
+    subparsers.add_parser("ui-restore", help="Restore by driving Finder deterministically (hands off to the agent when stuck). "
+                                             "Same flags as finder_restore.py; run it with --help", add_help=False)
+
     p_heal = subparsers.add_parser("heal-finder", help="Auto-heal stuck Finder / AMPDevicesAgent UI by restarting services")
     p_heal.add_argument("--timeout", type=float, default=10.0, help="Max seconds to wait for Finder to respawn")
+
+    if len(sys.argv) > 1 and sys.argv[1] == "ui-restore":
+        import finder_restore
+        return finder_restore.main(sys.argv[2:])
 
     args = parser.parse_args()
 
@@ -748,6 +879,14 @@ def main() -> int:
         except TimeoutError as e:
             print(f"[!] {e}")
             return 1
+    elif args.command == "activate":
+        u = args.udid or (get_connected_udids() or [None])[0]
+        if not u:
+            print("[!] No phone connected.")
+            return 2
+        res = activate_via_finder(u, timeout_sec=args.timeout)
+        print(res.get("message") or res)
+        return 0 if res.get("success") else 1
     elif args.command == "stage-finder":
         ui_info = detect_finder_setup_view()
         print(f"Finder Setup View: {ui_info}")

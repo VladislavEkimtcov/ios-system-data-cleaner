@@ -389,7 +389,7 @@ class TestDeviceWindowMatch(unittest.TestCase):
         import restorer
         with mock.patch.object(restorer, "device_window_names", return_value=['Bob\'s "Peach"']):
             m = restorer.device_window_match("U1")
-        self.assertIn('wName is "Bob\'s \\"Peach\\""', m)
+        self.assertIn('wName starts with "Bob\'s \\"Peach\\""', m)
         self.assertIn('wName contains "iPhone"', m)
 
     def test_scripts_use_the_shared_match(self):
@@ -572,3 +572,38 @@ class TestVerifierUdidCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMacToolInstallChoices(unittest.TestCase):
+    """Fresh macOS user: every outcome offers choices and nothing installs without consent."""
+
+    def _run(self, brew, consent=False, have_tools=False):
+        import dep_installer as d
+        with mock.patch.object(d, "find_brew", return_value=brew), \
+             mock.patch.object(d.shutil, "which", return_value="/x" if have_tools else None), \
+             mock.patch.object(d.subprocess, "run") as run:
+            run.return_value.returncode = 0
+            return d.install_cli_tools_macos(consent=consent), run
+
+    def test_no_homebrew_offers_alternatives_and_installs_nothing(self):
+        res, run = self._run(None)
+        self.assertEqual(res["status"], "homebrew_missing")
+        ids = {o["id"] for o in res["options"]}
+        self.assertTrue({"user_installs_homebrew", "finder_fallback", "stop"} <= ids)
+        run.assert_not_called()
+
+    def test_brew_without_consent_asks(self):
+        res, run = self._run("/opt/homebrew/bin/brew")
+        self.assertEqual(res["status"], "needs_consent")
+        self.assertGreaterEqual(len(res["options"]), 3)
+        run.assert_not_called()
+
+    def test_brew_with_consent_installs(self):
+        res, run = self._run("/opt/homebrew/bin/brew", consent=True)
+        run.assert_called_once()
+        self.assertEqual(run.call_args[0][0], ["/opt/homebrew/bin/brew", "install", "libimobiledevice"])
+
+    def test_already_installed_is_a_noop(self):
+        res, run = self._run("/opt/homebrew/bin/brew", have_tools=True)
+        self.assertEqual(res["status"], "already_installed")
+        run.assert_not_called()

@@ -117,7 +117,7 @@ def parse_backup_metadata(backup_dir: Path | str) -> BackupMetadata:
     return BackupMetadata(
         backup_path=str(path),
         folder_name=path.name,
-        device_name=str(info_data.get("Device Name") or "Unknown Device"),
+        device_name=(lambda n: n or "Unknown Device")(__import__("common").backup_device_name(info_data)),
         product_name=str(info_data.get("Product Name") or "iPhone"),
         product_type=str(info_data.get("Product Type") or ""),
         product_version=str(info_data.get("Product Version") or ""),

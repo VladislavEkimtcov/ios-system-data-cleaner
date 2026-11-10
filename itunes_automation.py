@@ -252,6 +252,14 @@ class ITunesAutomation:
         if activation.lower() == "activated":
             reasons.append("Device activation handshake is valid ('Activated')")
 
+        # The heuristics above can't tell a fresh erase from a phone that was wiped and has
+        # since been restored (the NVRAM erase record survives a restore). The phone's own
+        # setup state is authoritative, and anything ambiguous counts as NOT wiped.
+        setup_state = run_ideviceinfo("-q", "com.apple.purplebuddy").get("SetupState", "")
+        if is_wiped and setup_state:
+            is_wiped = False
+            reasons.append(f"Ignored the erase signals: the phone reports it is set up ({setup_state})")
+
         # Determine iTunes UI state
         ui_state = "unknown"
         if self.is_itunes_running():

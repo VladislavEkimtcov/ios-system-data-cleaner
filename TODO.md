@@ -1,4 +1,33 @@
-# TODO — de-hardcoding & cross-platform hardening
+# TODO
+
+## Next, immediate: prove the UI restore on a real Welcome screen
+
+**Done 2026-11-09/10:** the CLI restore is gone (`cli_restore.py` and its tests deleted; `restorer.py
+cli-restore` removed). The restore is now `restorer.py ui-restore` (`finder_restore.py`): a deterministic
+state machine over Finder's accessibility tree (role/name lookup, verify-after-every-action) that stops
+with an `agent_handoff` when a step fails, so the agent fixes the screen with the computer-use MCP and
+resumes. The safety gates live on in `restore_gates.py`. Covered by `tests/test_finder_restore.py`
+(scripted fake Finder) and `tests/test_restore_gates.py`.
+
+- [x] First real run 2026-11-09 (iPhone 8): welcome -> Continue -> Keychain-prefilled sheet -> Restore -> restore completed, phone back as its own name. Fixed live: popup shows placeholder "Item 1" before it settles; AppleScript prints "missing value"; click script must materialise `entire contents` first; window closes mid-restore (don't reopen). Still to tune: snapshot takes ~5 s; progress text.
+- [x] 2026-11-09 second run: Finder skipped the password sheet; script wrongly reported "restored" after 1 min (name flips early). Fixed: done = AppleMobileBackup exited + phone restarted + SetupState RestoredFromiTunesBackup (~11 min). Re-run end to end to see the fixed completion path live.
+- [x] Backup picker (`backup_picker.py`): name + "Last Backed Up" time must match the validated backup; verified live on the Welcome screen (keep-current path). A script-opened pop-up isn't readable through AX (a real click is), so a non-matching preselection hands off to the agent. Untested live: the walk-the-menu path (needs a readable menu).
+- [x] `backup_labels.py`: distinct, dated labels for this phone's backups (applied 2026-11-09 to 5 folders; reversible). Finder reads `Display Name`, not `Device Name` (fixed 2026-11-09 after a live check). The corrected labels have not yet been seen in a real pop-up: check at the next Welcome screen.
+- [x] Label hooks wired (after the safety copy, before a real restore, after a successful restore); covered by tests with the real backups isolated. Not exercised live: a full backup -> revive -> restore cycle through all three.
+- [ ] Find a script-side way to open the pop-up so its items are exposed (real-click equivalent via CGEvent?), so the agent isn't needed for a non-matching preselection.
+- [ ] **Run it for real again** on an erased phone (`ui-restore` dry run, then `--confirm --hello-confirmed`)
+      and fix what the real tree looks like: the AX class names/values in `snapshot_script` (radio
+      value `1`/`0`, the backup pop-up's menu items, the sheet's text field and "Restore" button, the
+      progress text phrases in `RESTORING_PHRASES`) were written from earlier hand-driven runs and
+      have NOT been exercised against a live Welcome screen. Expect to tune them.
+- [ ] Check `entire contents of window` speed on this Mac's Finder (snapshot each 3 s; if slow, scope
+      it to the splitter group).
+- [ ] Confirm the sheet-settle rule (1.5 s) is enough: an earlier hand click during the slide missed.
+- [ ] Retire the older low-level helpers (`stage-finder`, `confirm-sheet`, `monitor-restore`; fixed AX
+      paths) once `ui-restore` is proven. They remain only as debugging aids; `iphone_manager.py` and a
+      few tests still call them.
+- [x] Empty password box is watched; wrong-password alerts are dismissed and the run continues; after 2 failures the password helper is launched and offered (`OFFER_PASSWORD_HELPER`). Tested with the fake Finder and the real helper launcher only; try it live with a deliberately wrong password.
+- [ ] Open question (low priority): why the CLI restore booted empty (`--system` untested).
 
 Status: backlog, captured 2026-11-09. The pipeline works end-to-end on the happy path; these
 items are about robustness on machines, OS versions, and locales other than the one it was
@@ -13,17 +42,18 @@ only signal.
 ## A. Cross-platform / macOS (this Mac)
 
 ### A1. Prefer libimobiledevice CLI over Finder/iTunes UI for the restore
-- [ ] Make `idevicebackup2 -u <UDID> restore --system --settings --reboot <BACKUP_ROOT>` the
+_Implemented 2026-11-09 as `cli_restore.py` (`restorer.py cli-restore`); needs the real-phone run in section M._
+- [x] Make `idevicebackup2 -u <UDID> restore --system --settings --reboot <BACKUP_ROOT>` the
       primary restore path. Today the restore is driven entirely through Finder AppleScript
       (`restorer.py` `stage_finder_restore_selection`, `auto_confirm_finder_restore_sheet`) and
       iTunes keystrokes (`itunes_automation.py` `actuate_restore_ui`).
-- [ ] Password handling: `--password` puts the secret on argv (visible in `ps`), which
+- [x] Password handling (hidden dialog; password only in the child's env, test-covered): `--password` puts the secret on argv (visible in `ps`), which
       SECURITY.md forbids. Use `-i/--interactive` and feed stdin, or confirm whether the
       installed libimobiledevice version reads the password any other way. Add a test
       that the password never shows up in argv.
-- [ ] Keep the Finder/iTunes UI path as a fallback only. Its output must keep the existing
+- [x] Keep the Finder/iTunes UI path as a fallback only. Its output must keep the existing
       structured `handoff` dict.
-- [ ] Restore against the verified `-prewipe` clone (or verify the live folder still matches
+- [x] Restore against the verified `-prewipe` clone (or verify the live folder still matches
       it) so a Finder auto-sync can't swap the backup underneath us.
 
 ### A2. Finder AppleScript uses hardcoded accessibility paths
@@ -58,7 +88,8 @@ only signal.
       expected title) before clicking.
 
 ### A6. Restore completion detection is heuristic
-- [ ] `monitor_restore_progress` decides "complete" from Finder status text
+_CLI path done in `cli_restore.wait_for_finish`; the Finder path still uses the heuristic._
+- [~] `monitor_restore_progress` decides "complete" from Finder status text
       ("Available" or empty string after a reboot). Replace it with a state machine on
       lockdown: device drops off USB → reappears → `ideviceinfo` answers →
       `DeviceName` is no longer the factory "iPhone" (or the `idevicebackup2` exit code if A1
@@ -96,6 +127,97 @@ only signal.
 ### A11. Docs drift
 - [ ] README badge says "Platform: macOS", but Windows is supported. AGENTS.md and
       SECURITY.md describe behaviour that A1–A6 will change. Update them when those land.
+
+---
+
+## M. macOS full-stack validation (hand to the agent on this Mac)
+
+Do this before calling macOS "ready for a normie to point an agent at the repo URL".
+Needs a spare phone you can afford to wipe (never the daily driver) and the human at the
+physical gates. Follow the CLI-first rule in AGENTS.md: Finder is driven only if the tools are
+missing, the install was declined, and the user accepted Finder driving.
+
+Already exercised on 2026-11-09 (phone was found already restored, so only the front half ran):
+connection diagnosis, host buffer check, `backup_verifier.py` PASS with proof of password,
+safe refusal in `stage-finder` when the phone was not wiped. Fixed that day: Finder window match
+with a trailing space in the device name, and `status` misreporting a restored phone as wiped.
+
+- [~] Fresh-user start: no libimobiledevice installed. Detection and the macOS installer
+      (`dep_installer.py --tools`: choices without consent, `--yes` to install, Homebrew-missing
+      branch) are done and unit-tested. Still to prove on a Mac that really has no Homebrew.
+- [x] Baseline: `storage_monitor.py --snap before_reset`; `status` shows the real setup state.
+- [x] Backup via `backup_runner.py` (incremental, 6 min; passcode gate not exercised because the phone was unlocked): encryption forced on, progress check-ins
+      (`.backup_status.json`), `Ping`/`Glass` sounds and banners at the passcode gate.
+- [x] `backup_verifier.py` PASS with proof of password, then the `-prewipe` APFS clone.
+      AGENTS.md `--compact` mention fixed. Found and fixed: `make_prewipe_clone` reused a stale
+      clone (4 h older than the verified backup); it now refreshes it, swapping only after the
+      new one verifies.
+- [ ] Gate 1: human erases on the phone ("Keep eSIMs and Erase Data").
+      `restorer.py wait` detects the return to the Hello screen.
+- [ ] Restore via CLI (A1; `restorer.py cli-restore`, dry-run already refuses correctly on a set-up phone). Then separately test the Finder fallback: `stage-finder` against a
+      real Welcome screen, window match with a device name that has trailing spaces or
+      non-Latin characters, password sheet, backup choice.
+- [ ] Password helper page for the proof (`password_tracker.py --exit-on-success`, also `cli-restore --password-source helper`): click through it once in a real browser.
+- [x] Activation (found 2026-11-09): erased phone is Unactivated and refuses CLI restore; `restorer.py activate` opens it in Finder, waits for Activated, closes the window. Scripted sidebar click only highlights on this Mac; the handoff (vision click) works.
+- [ ] Gate 2: password entry. `monitor-restore` takes over and follows the restore to reboot.
+- [ ] Post-restore: `storage_monitor.py --diff`, ROI report, MVT scan, app catalog. Wait until
+      app re-downloads settle before reading the "recovered GB" number.
+- [ ] Failure paths: unplug mid-backup, locked phone, wrong backup password, Finder hung
+      (`heal-finder`), disk buffer too small. Each must end in a clear one-line human action.
+- [ ] End state: the phone is usable, eSIM/2FA/keychain intact, nothing left half-done.
+
+### M-next. Open items after the first real CLI restore (2026-11-09, do later)
+
+The first end-to-end run (erase -> activate via Finder -> `cli-restore` -> restarted as
+"Яблоко", activated, SetupState RestoredFromiTunesBackup) worked. Still to do:
+
+- [ ] **Apps missing after restore (reported by the user, investigate first).** Facts so far: the
+      backup holds 45 installed apps in Info.plist and ~866 app domains in Manifest.plist; the
+      phone's data used (~8 GB) matches the backup's ~9.8 GB, so the app *data* came back. App
+      binaries are not in a backup: iOS re-downloads them after the person signs in to their
+      Apple ID, so apps stay absent until that happens (and the phone must be on Wi-Fi). Find
+      out whether the user saw empty home screen vs greyed download icons, whether the phone is
+      still at Setup Assistant, and whether the Apple ID step was skipped. Decide whether
+      `cli-restore` should pass/avoid `--skip-apps`, and add plain-language guidance to
+      AGENTS.md: "sign in with your Apple ID on the phone so your apps can re-download".
+- [ ] **RESOLVED by Finder; CLI restore root cause still open (2026-11-09).** A Finder restore of the
+      same backup gave the full onboarding (Apple ID, Touch ID) and all apps. The CLI restores
+      (`--system --settings`, default reboot) booted to the lock screen with no setup and no
+      apps. Research found corroboration, not a documented bug: a 2023 write-up
+      (naut.ca, "Restoring iPhones with idevicebackup2") reports `--system --settings` installed
+      no apps and that `--system --no-reboot` (no `--settings`) followed by a manual reboot fixed
+      it; libimobiledevice issue #1548 (iOS 17.4.1) reports a restore that reaches 100% yet the
+      phone boots as new; #414 asks about the setup screens (opposite symptom) and has no fix.
+      `--settings` restoring the phone's "setup done" state is my UNCONFIRMED hypothesis.
+      SOURCE CONFIRMED 2026-11-09 (idevicebackup2.c): `--settings` => `RestorePreserveSettings=false`
+      (the backup's settings overwrite the phone's fresh ones); without it => `true`. Default
+      reboot = `RestoreShouldReboot` omitted. `cli-restore` now omits `--settings` by default
+      (`--restore-settings` opts in) and keeps the auto reboot.
+      TO PROVE: erase the phone, `activate`, `cli-restore --confirm --hello-confirmed`, and check
+      that Setup Assistant + Apple ID appear and apps come back. Then drop "experimental".
+      (Older plan, now superseded: CLI restore with `--system --no-reboot` only, then reboot by hand; compare. Until
+      then `cli-restore` is marked experimental in AGENTS.md and the agent should default to Finder.)
+- [ ] **Apple ID sign-in failed on first boot after the restore (2026-11-09):** phone went straight to the
+      Home screen, signed out, and refused the Apple ID password, so no apps re-downloaded and the
+      layout was not rebuilt. Backup identity was verified (right phone, 17:47, 45 apps listed).
+      Add a PRE-erase question to AGENTS.md: "Do you know your Apple ID password, and can you
+      sign in on this phone (2FA device nearby)?", and a post-restore step that checks sign-in.
+      Also guard `make_prewipe_clone`: refreshing the clone replaces the older good copy; a new
+      backup of a degraded phone must never replace the only good backup (keep one previous
+      generation). A protected copy was made by hand: `.protected-<udid>-golden-20261109`.
+- [ ] Post-restore: wait for app re-downloads to settle, then `storage_monitor.py --snap
+      post_restore` and `--diff`, ROI report, MVT scan, app catalog.
+- [ ] Verify eSIM, 2FA apps and keychain are intact (end-state item).
+- [ ] Failure paths: unplug mid-restore, wrong backup password (covered by tests, not on a
+      real phone), locked phone, Finder hung (`heal-finder`), disk buffer too small.
+- [ ] Test the Finder-fallback restore (`stage-finder`) on a real Welcome screen.
+- [ ] Click through the password helper page in a real browser (`password_tracker.py
+      --exit-on-success`, and `cli-restore --password-source helper`).
+- [ ] Fresh Mac with no Homebrew: prove the `dep_installer.py --tools` Homebrew-missing branch.
+- [ ] Activation: the scripted Finder sidebar click only highlights the row on this Mac; the
+      handoff (vision click) works. Find a reliable scripted way, or keep the handoff.
+- [ ] `restorer.py wait`: reword its "Hello" claim; it cannot see the screen (see AGENTS.md).
+- [ ] Windows: everything in section W still needs a real machine.
 
 ---
 
@@ -194,3 +316,17 @@ _Fixed on `hardening/batch-1`; still needs a run on real Windows 10/11 (with and
 ### W12. CI coverage
 - [ ] `windows-latest` CI runs, but check that the tests actually exercise the paths above
       with mocks: bat parsing, backup-root selection, UIA handoff dicts, console encoding.
+
+### W13. CLI-first for backup AND restore, Finder/iTunes only as consented fallback
+Policy is in AGENTS.md ("CLI-first rule"). macOS is being tested first; the Windows agent
+works this out on the box.
+- [ ] Find out what actually installs `idevicebackup2.exe` today (`winget search`,
+      `scoop search`, `choco search libimobiledevice`; prebuilt
+      github.com/jrjr/libimobiledevice-windows; MSYS2 clang64 package). Check what
+      `dep_installer.py` already does and reuse it.
+- [ ] Apple's USB driver (iTunes or Apple Devices app) is still required; detect it.
+- [ ] Detect tools via a shared `find_cli_tools()` (`shutil.which` plus known install dirs).
+      If missing: offer install; fall back to iTunes/Apple Devices UI automation only if the
+      user declines AND accepts UI driving.
+- [ ] Restore over CLI (`idevicebackup2 restore`) has no code path on either platform yet;
+      mirror whatever the macOS side ends up with.

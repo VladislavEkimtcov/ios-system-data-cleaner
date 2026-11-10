@@ -455,11 +455,20 @@ def main():
     fm = info.get("fm-activation-locked")
     print(f"  Activation Lock (Find My): {decode_data_value(fm) if fm else 'Unknown'}")
     pwd_prot = info.get("PasswordProtected")
-    if pwd_prot and pwd_prot.lower() == "false":
-        print("  Device Setup State:   Unconfigured / Hello Screen (No Passcode)")
+    # The phone's own setup state is authoritative. PasswordProtected=false is not reliable (it reads false on phones
+    # that DO have a passcode), and `obliteration` is a record of the LAST
+    # wipe that survives a restore, so neither alone says the phone is sitting at Hello.
+    setup_state = run_ideviceinfo("-q", "com.apple.purplebuddy").get("SetupState", "")
+    activated = info.get("ActivationState") == "Activated"
     oblit = info.get("obliteration")
-    if oblit:
-        decoded_oblit = decode_data_value(oblit)
+    decoded_oblit = decode_data_value(oblit) if oblit else ""
+    if setup_state:
+        print(f"  Device Setup State:   {setup_state}")
+    if activated and setup_state:
+        if decoded_oblit:
+            print(f"  Last wipe record:     {decoded_oblit} (historical; phone is set up)")
+    elif pwd_prot and pwd_prot.lower() == "false" and not activated:
+        print("  Device Setup State:   Unconfigured / Hello Screen (No Passcode)")
         if "EACS Done" in decoded_oblit:
             print(f"  ✨ POST-ERASE STATE:  Factory Wipe Complete ({decoded_oblit})")
 

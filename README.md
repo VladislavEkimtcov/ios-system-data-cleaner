@@ -105,12 +105,16 @@ python3 iphone_manager.py status
    ```
    *(Must show `✅ RESULT: PASS` before proceeding).*
 3. On your iPhone: Go to **Settings → General → Transfer or Reset iPhone → Erase All Content and Settings**.
+   > 💡 If it offers to back up to iCloud first (**"Finish Uploading Then Erase"**), choose **"Skip Backup" / "Erase Now"**: your full backup is already on this Mac and the upload can take a very long time.
+   > ⏳ The phone's screen can be slow or stop responding for a minute or two while it erases. That's normal: wait, don't tap repeatedly, don't unplug.
    > ⚠️ **IMPORTANT:** If prompted regarding eSIMs, select **"Keep eSIMs and Erase Data"**.
-4. Once the phone reboots into the "Hello" screen, let the restorer orchestrate Finder:
+4. Once the phone shows the "Hello" screen, restore through **Finder**. (There is no command-line restore: it left the phone booting empty, without setup or apps.) Your agent drives Finder for you:
    ```bash
    python3 iphone_manager.py restorer wait
-   python3 iphone_manager.py restorer stage-finder --auto-confirm
+   python3 restorer.py ui-restore                                   # dry run: checks everything, changes nothing
+   python3 restorer.py ui-restore --confirm --hello-confirmed       # the real restore
    ```
+   It opens the phone in Finder (activating it if needed), checks the backup name, presses **Continue**, and presses **Restore** if your Keychain filled in the backup password; if not, it waits for you to type it. If any step goes wrong it stops and hands over to the agent, which fixes the screen and resumes with `--resume`.
 5. When restore finishes, capture your "After" snapshot and view your savings:
    ```bash
    python3 storage_monitor.py --snap post_restore

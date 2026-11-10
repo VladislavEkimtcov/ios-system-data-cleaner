@@ -110,21 +110,103 @@ def compute_sha256(path: Path) -> str:
     return h.hexdigest().lower()
 
 
+HOMEBREW_INSTALL_CMD = (
+    '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+)
+MAC_CLI_TOOLS = ("idevicebackup2", "ideviceinfo", "idevice_id")
+
+
+def find_brew() -> Optional[str]:
+    """Locate Homebrew even when the shell PATH doesn't include it (Apple Silicon default)."""
+    return shutil.which("brew") or next(
+        (p for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew") if os.access(p, os.X_OK)), None
+    )
+
+
+def install_cli_tools_macos(consent: bool = False) -> Dict[str, Any]:
+    """
+    macOS: the phone helper tools (libimobiledevice) come from Homebrew.
+
+    Never installs anything without `consent`. Without it (or without Homebrew) the result
+    carries plain-language `options` for the agent to read to the user, so the person always
+    chooses between alternatives instead of being handed one command.
+    """
+    if all(shutil.which(t) for t in MAC_CLI_TOOLS):
+        return {"status": "already_installed", "message": "The phone helper tools are already installed."}
+
+    finder_option = {
+        "id": "finder_fallback",
+        "label": "Skip the helper tools and let me drive the Finder window on your Mac for you "
+                 "(slower and less reliable, and you must be OK with me taking over Finder).",
+    }
+    brew = find_brew()
+    if not brew:
+        return {
+            "status": "homebrew_missing",
+            "message": "Your Mac needs a small free helper toolkit to talk to the iPhone. It is "
+                       "normally installed with Homebrew, which isn't on this Mac yet.",
+            "homebrew_install_command": HOMEBREW_INSTALL_CMD,
+            "options": [
+                {
+                    "id": "user_installs_homebrew",
+                    "label": "Install Homebrew yourself: open the Terminal app, paste the command, and "
+                             "type your Mac password when asked (it won't show as you type). "
+                             "Tell me when it finishes and I'll install the rest.",
+                    "command": HOMEBREW_INSTALL_CMD,
+                },
+                finder_option,
+                {
+                    "id": "stop",
+                    "label": "Stop here for now; nothing has been changed.",
+                },
+            ],
+        }
+
+    cmd = [brew, "install", "libimobiledevice"]
+    if not consent:
+        return {
+            "status": "needs_consent",
+            "message": "Your Mac needs a small free helper toolkit (libimobiledevice) to talk to "
+                       "the iPhone. Homebrew is available to install it.",
+            "options": [
+                {"id": "agent_installs", "label": "Let me install it for you (takes about a minute).",
+                 "command": " ".join(cmd)},
+                {"id": "user_installs", "label": "Run it yourself in Terminal: " + " ".join(cmd)},
+                finder_option,
+            ],
+        }
+
+    res = subprocess.run(cmd, check=False)
+    bindir = os.path.dirname(brew)
+    ok = res.returncode == 0 and all(
+        shutil.which(t) or os.access(os.path.join(bindir, t), os.X_OK) for t in MAC_CLI_TOOLS
+    )
+    return {
+        "status": "success" if ok else "failed",
+        "returncode": res.returncode,
+        "message": "Phone helper tools installed." if ok else
+                   "The install didn't finish. Run `brew doctor` or choose the Finder option instead.",
+    }
+
+
 def install_cli_tools(
     target_dir: Optional[Path] = None,
     force: bool = False,
     progress_callback: Optional[Callable[[str], None]] = None,
+    consent: bool = False,
 ) -> Dict[str, Any]:
     """
     Downloads and extracts the precompiled libimobiledevice suite into ./tools/bin/.
     Extracts ideviceinfo.exe, idevicerestore.exe, idevice_id.exe, idevicebackup2.exe, etc.
     """
+    if sys.platform == "darwin":
+        return install_cli_tools_macos(consent=consent)
     # These are Windows .exe/.dll builds; refuse to run anywhere else.
     if sys.platform != "win32":
         return {
             "status": "unsupported",
-            "message": "The prebuilt libimobiledevice suite is Windows-only. On macOS/Linux "
-                       "install it from your package manager (e.g. `brew install libimobiledevice`).",
+            "message": "The prebuilt libimobiledevice suite is Windows-only. Install "
+                       "libimobiledevice from your package manager.",
         }
 
     out_dir = target_dir or LOCAL_TOOLS_BIN
@@ -327,7 +409,7 @@ def run_interactive_or_automated_setup(
         print("  ❌ libimobiledevice suite is NOT installed.")
         should_install = install_all or yes or prompt_yes_no("  -> Download and install native CLI suite into ./tools/bin?", default=False)
         if should_install:
-            res = install_cli_tools()
+            res = install_cli_tools(consent=True)
             print(f"  Result: {res.get('message')}")
 
     # 2. iTunes & AMDS Check
@@ -366,7 +448,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.tools:
-        res = install_cli_tools()
+        # Without --yes, macOS only reports the choices; the agent relays them to the user.
+        res = install_cli_tools(consent=args.yes)
         print(json.dumps(res, indent=2))
     elif args.itunes:
         res = install_itunes()

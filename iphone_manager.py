@@ -181,7 +181,7 @@ def cmd_detect_wipe(args: argparse.Namespace) -> int:
     print(f"  Connected Device:     {status['current_device_name'] or 'N/A'}")
     print(f"  Backup Device Target: {status['backup_device_name'] or 'N/A'}")
     print(f"  UDID:                 {status['udid'] or 'N/A'}")
-    print(f"  Password Protected:   {'YES' if status['password_protected'] else 'NO (Hello / Setup Screen Active)'}")
+    print(f"  Password Protected:   {'YES' if status['password_protected'] else 'not reported (unreliable; not proof of a Hello screen)'}")
     print(f"  Activation State:     {status['activation_state'] or 'N/A'}")
     if status.get("obliteration"):
         print(f"  NVRAM Obliteration:   {status['obliteration']}")
@@ -410,6 +410,8 @@ def cmd_revive(args: argparse.Namespace) -> int:
         print(f"  ❌ Safety clone failed: {e}", file=sys.stderr)
         return 1
     print(f"  ✅ Immutable pre-wipe clone: {prewipe_clone.name}")
+    from backup_labels import ensure_labels
+    ensure_labels(backup.udid, say=lambda m: print(f"  🏷️  {m}"))   # distinct names in Finder's restore pop-up
 
     # 4. Token Extraction & Credential Safeguard (manifest sealed in the private state dir).
     print("\n[4/4] TOKEN EXTRACTION & CREDENTIAL SAFEGUARD")
@@ -437,6 +439,8 @@ def cmd_revive(args: argparse.Namespace) -> int:
     print("  2. Tap 'Erase All Content and Settings' -> Tap 'Continue'")
     print("  3. 💡 HINT: If prompted 'Uploading Data to iCloud' / 'Finish Uploading Then Erase',")
     print("     tap 'Skip Backup' or 'Erase Now' (your full encrypted backup is already secured on this PC).")
+    print("     (The phone's screen may be slow or stop responding for a minute or two while it erases: that's normal.")
+    print("      Wait, don't tap repeatedly, don't unplug.)")
     print("  4. ⚠️ CRITICAL FOR eSIMs: If prompted about cellular plans, choose 'Keep eSIMs and Erase Data'.")
     print("  5. Once erased and back at the 'Hello' screen, plug back into PC:")
     print(f"     - Open iTunes -> Click 'Restore Backup...' -> Select {backup.folder_name}")
