@@ -28,7 +28,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from common import backup_root, connected_udids, dir_size, ensure_utf8_console
+from common import backup_root, connected_udids, dir_size, ensure_utf8_console, host_words
+
+_W = host_words()
+_TRASH = "the Trash" if sys.platform == "darwin" else "the 'Removed Backups' folder"
 import restore_gates as gates
 
 GB = 1000 ** 3
@@ -181,7 +184,7 @@ def propose_moves(backups: List[Dict[str, Any]], free: Optional[float] = None) -
 def describe(backups: List[Dict[str, Any]], moves: List[Dict[str, Any]], others: List[Dict[str, Any]],
              free: Optional[float]) -> List[str]:
     """Plain-language lines for the chat. The agent shows these as they are."""
-    lines = [f"BACKUPS_AVAILABLE: {len(backups)} backup(s) of this phone on this Mac"
+    lines = [f"BACKUPS_AVAILABLE: {len(backups)} backup(s) of this phone on this {_W['computer']}"
              + (f" ({free} GB free on the disk)." if free is not None else ".")]
     best = max((b["facts"].get("app_count") or 0 for b in backups), default=0)
     for b in backups:
@@ -194,13 +197,13 @@ def describe(backups: List[Dict[str, Any]], moves: List[Dict[str, Any]], others:
                          "likely bring the data back WITHOUT most of the App Store apps.")
     if others:
         total = sum(o["size_gb"] for o in others)
-        lines.append(f"  (Also on this Mac, other phones' backups, not touched: "
+        lines.append(f"  (Also on this {_W['computer']}, other phones' backups, not touched: "
                      + ", ".join(f"{o['folder']} {o['size_gb']} GB" for o in others) + f"; {round(total, 1)} GB in all.)")
     if moves:
         top = moves[0]
-        lines.append(f"PROPOSED_NEXT_MOVE: move '{top['folder']}' to the Trash. Why: {top['why']}. "
+        lines.append(f"PROPOSED_NEXT_MOVE: move '{top['folder']}' to {_TRASH}. Why: {top['why']}. "
                      f"Up to {top['frees_gb']} GB (copies that share data free less). Ask the person first; "
-                     f"run `python3 restorer.py backups --trash {top['folder']}` only after a yes.")
+                     f"run `{_W['python']} restorer.py backups --trash {top['folder']}` only after a yes.")
         for m in moves[1:3]:
             lines.append(f"  then maybe: '{m['folder']}': {m['why']} (up to {m['frees_gb']} GB)")
     elif free is not None and free < LOW_DISK_GB:
@@ -217,6 +220,9 @@ def describe(backups: List[Dict[str, Any]], moves: List[Dict[str, Any]], others:
 # The only deleting: one folder, to the Trash, after a yes
 # ---------------------------------------------------------------------------
 
+REMOVED_DIR_NAME = "Removed Backups"
+
+
 def trash_backup(udid: str, folder: str, backups: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Moves ONE of this phone's backups to the Trash (recoverable). Refuses protected/live/safety copies and
     anything that would leave the phone without a usable backup or lose the best app count."""
@@ -224,10 +230,10 @@ def trash_backup(udid: str, folder: str, backups: Optional[List[Dict[str, Any]]]
     by = {b["folder"]: b for b in backups}
     b = by.get(folder)
     if not b:
-        return {"ok": False, "message": f"'{folder}' is not one of this phone's backups on this Mac."}
+        return {"ok": False, "message": f"'{folder}' is not one of this phone's backups on this {_W['computer']}."}
     if b["kind"] in ("protected", "main", "safety"):
         return {"ok": False, "message": f"'{folder}' is the {b['label']}: I won't trash it. "
-                                         "(If the person really wants it gone, they can do it in Finder.)"}
+                                         f"(If the person really wants it gone, they can do it in {'Finder' if sys.platform == 'darwin' else 'File Explorer'}.)"}
     rest = [o for o in backups if o["folder"] != folder and o["usable"]]
     if b["usable"]:
         if not rest:
@@ -236,16 +242,23 @@ def trash_backup(udid: str, folder: str, backups: Optional[List[Dict[str, Any]]]
         if (b["facts"].get("app_count") or 0) == best and best and \
                 max((o["facts"].get("app_count") or 0) for o in rest) < best:
             return {"ok": False, "message": f"That is the only backup listing all {best} apps. Not trashing it."}
-    if sys.platform != "darwin":
-        return {"ok": False, "message": "Moving to the Trash is only automated on macOS; remove it by hand."}
-    trash = Path.home() / ".Trash"
+    if sys.platform == "darwin":
+        trash, where, how = Path.home() / ".Trash", "the Trash", "empty the Trash to free it"
+    elif sys.platform == "win32":
+        # Not the Recycle Bin: for folders this large the shell may delete permanently without asking. A sibling
+        # folder of the backup root is on the same volume (an instant rename), recoverable, and outside the folder
+        # iTunes lists.
+        trash = Path(b["path"]).parent.parent / REMOVED_DIR_NAME
+        where, how = f"'{trash}'", "delete that folder to free the space"
+    else:
+        return {"ok": False, "message": "Moving a backup aside is only automated on macOS and Windows; remove it by hand."}
     trash.mkdir(exist_ok=True)
     dest = trash / b["folder"]
     if dest.exists():
         dest = trash / f"{b['folder']} {time.strftime('%H.%M.%S')}"
     os.replace(str(b["path"]), str(dest))
-    return {"ok": True, "message": f"Moved '{folder}' to the Trash (about {b['size_gb']} GB; empty the Trash to free it).",
-            "trashed": folder}
+    return {"ok": True, "message": f"Moved '{folder}' to {where} (about {b['size_gb']} GB; {how}).",
+            "trashed": folder, "moved_to": str(dest)}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

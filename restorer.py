@@ -38,7 +38,7 @@ def query_device_info(udid: Optional[str] = None, *extra: str) -> Dict[str, str]
         cmd.extend(["-u", udid])
     cmd.extend(extra)
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=10)
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", timeout=10)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return {}
 
@@ -267,7 +267,7 @@ def finder_window_titles() -> List[str]:
     try:
         out = subprocess.check_output(
             ["osascript", "-e", 'tell application "Finder" to get name of every Finder window'],
-            text=True, timeout=10).strip()
+            text=True, encoding="utf-8", errors="replace", timeout=10).strip()
     except Exception:  # noqa: BLE001
         return []
     return [t.strip() for t in out.split(", ")] if out else []

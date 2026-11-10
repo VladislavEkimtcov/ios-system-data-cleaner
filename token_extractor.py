@@ -425,6 +425,7 @@ def extract_keychain_artifact(backup_dir: Path) -> KeychainArtifact:
 
     # 1. Query Manifest.db if present
     if manifest_db.is_file():
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{manifest_db.resolve()}?mode=ro", uri=True)
             cur = conn.cursor()
@@ -437,6 +438,9 @@ def extract_keychain_artifact(backup_dir: Path) -> KeychainArtifact:
             conn.close()
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     # 2. Fallback to direct SHA1 calculation for KeychainDomain-keychain-backup.plist
     if not keychain_file_id:
@@ -534,6 +538,7 @@ def extract_duo_accounts(backup_dir: Path) -> List[AuthAccount]:
     found_files: List[Tuple[str, str]] = []
 
     if manifest_db.is_file():
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{manifest_db.resolve()}?mode=ro", uri=True)
             cur = conn.cursor()
@@ -545,6 +550,9 @@ def extract_duo_accounts(backup_dir: Path) -> List[AuthAccount]:
             conn.close()
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     # Direct fallback for standard relative paths
     known_rel_paths = [
@@ -645,6 +653,7 @@ def extract_duo_accounts(backup_dir: Path) -> List[AuthAccount]:
 
         # Case B: SQLite Accounts Database
         elif rel_path.endswith(".sqlite") or "duo" in rel_path.lower():
+            conn = None
             try:
                 conn = sqlite3.connect(f"file:{blob_path.resolve()}?mode=ro", uri=True)
                 cur = conn.cursor()
@@ -679,6 +688,9 @@ def extract_duo_accounts(backup_dir: Path) -> List[AuthAccount]:
                 conn.close()
             except Exception:
                 pass
+            finally:
+                if conn is not None:
+                    conn.close()
 
     return accounts
 
@@ -696,6 +708,7 @@ def extract_google_authenticator_accounts(backup_dir: Path) -> List[AuthAccount]
     found_files: List[Tuple[str, str]] = []
 
     if manifest_db.is_file():
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{manifest_db.resolve()}?mode=ro", uri=True)
             cur = conn.cursor()
@@ -707,6 +720,9 @@ def extract_google_authenticator_accounts(backup_dir: Path) -> List[AuthAccount]
             conn.close()
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     if not found_files:
         rel = "Documents/google_authenticator.sqlite"
@@ -719,6 +735,7 @@ def extract_google_authenticator_accounts(backup_dir: Path) -> List[AuthAccount]
         db_path = backup_dir / fid[:2] / fid
         if not db_path.is_file():
             continue
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
             cur = conn.cursor()
@@ -745,6 +762,9 @@ def extract_google_authenticator_accounts(backup_dir: Path) -> List[AuthAccount]
             conn.close()
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     return accounts
 
@@ -758,6 +778,7 @@ def extract_microsoft_authenticator_accounts(backup_dir: Path) -> List[AuthAccou
     found_files: List[Tuple[str, str, str]] = []
 
     if manifest_db.is_file():
+        conn = None
         try:
             conn = sqlite3.connect(f"file:{manifest_db.resolve()}?mode=ro", uri=True)
             cur = conn.cursor()
@@ -771,6 +792,9 @@ def extract_microsoft_authenticator_accounts(backup_dir: Path) -> List[AuthAccou
             conn.close()
         except Exception:
             pass
+        finally:
+            if conn is not None:
+                conn.close()
 
     for b, fid, rel in found_files:
         p = backup_dir / fid[:2] / fid

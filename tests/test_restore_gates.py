@@ -56,6 +56,7 @@ class GateTests(unittest.TestCase):
             mock.patch.object(cr, "device_setup_verdict", return_value=dict(HELLO)),
             mock.patch.object(cr, "backup_root", return_value=self.root),
             mock.patch.object(cr, "_battery", return_value=80),
+            mock.patch.object(cr, "restore_route", return_value={"kind": "finder", "exe": None, "version": None}),
         ]
         for p in self.patches:
             p.start()
@@ -159,6 +160,20 @@ class GateTests(unittest.TestCase):
         with mock.patch.object(cr, "device_setup_verdict", return_value={**HELLO, "activation_state": "Unactivated"}):
             self.assertTrue(cr.check_preconditions(allow_unactivated=True)["ok"])
 
+    def test_refuses_when_this_computer_has_nothing_to_restore_with(self):
+        with mock.patch.object(cr, "restore_route", return_value={"kind": None, "exe": None, "version": None}):
+            res = self.code()
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["code"], "no_restore_app")
+        self.assertIn("can't restore here", res["message"])  # the phone may already be erased: no "don't erase"
+        self.assertIn("do NOT erase", cr.no_restore_app_refusal(before_erase=True)["message"])
+        self.assertEqual([o["id"] for o in res["options"]], ["install_itunes", "restore_on_mac", "stop"])
+
+    def test_restore_route_never_raises(self):
+        self.patches[-1].stop()  # the real restore_route
+        with mock.patch.dict(sys.modules, {"itunes_env": None}):
+            self.assertIsNone(cr.restore_route()["kind"])
+
 
 class SetupVerdictTests(unittest.TestCase):
     def verdict(self, base, purple):
@@ -188,20 +203,6 @@ class SetupVerdictTests(unittest.TestCase):
     def test_silent_phone_is_unknown(self):
         self.assertEqual(self.verdict({}, {}), "unknown")
 
-
-
-class ITunesWipeDetectionNotFooledByOldEraseRecord(unittest.TestCase):
-    def test_restored_phone_with_old_erase_record_is_not_wiped(self):
-        from itunes_automation import ITunesAutomation
-        info = {"UniqueDeviceID": "U", "DeviceName": "iPhone", "ActivationState": "Activated",
-                "obliteration": "RUFDUyBEb25lIEAxNzk0MTUzOTQz"}  # "EACS Done @1794153943"
-
-        def fake(*args):
-            return {"SetupState": "RestoredFromiTunesBackup"} if args else info
-        driver = ITunesAutomation()
-        with mock.patch("storage_monitor.run_ideviceinfo", side_effect=fake), \
-             mock.patch.object(driver, "is_itunes_running", return_value=False):
-            self.assertFalse(driver.detect_device_wipe_state("U")["is_wiped"])
 
 
 class PasswordHelperPage(unittest.TestCase):

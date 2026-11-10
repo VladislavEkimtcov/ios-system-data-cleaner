@@ -1,0 +1,89 @@
+WINDOW|||iTunes
+W|||pane|||||||||true|||-1640060304|||562,186,1242,737
+W|||button|||Configure Accessibility…||||||true|||-1511650768|||633,1414,284,32
+W|||button|||Reset Warnings||||||true|||-1511672608|||633,1367,206,32
+W|||checkbox|||Manually manage music and videos|||0|||true|||-1511694448|||633,1325,1050,27
+W|||static text|||AAC||||||true|||-1512354064|||1092,1283,38,27
+W|||pop up button||||||128 kbps|||false|||-1511368256|||957,1280,123,32
+W|||checkbox|||Convert higher bit rate songs to|||0|||true|||-1511685712|||633,1283,312,27
+W|||checkbox|||Prefer standard definition videos|||0|||true|||-1511720656|||633,1241,1050,27
+W|||checkbox|||Sync only checked songs and videos|||0|||false|||-1511703184|||633,1199,1050,27
+W|||checkbox|||Sync with this iPhone over Wi-Fi|||0|||true|||-1511698816|||633,1157,1050,27
+W|||checkbox|||Automatically sync when this iPhone is connected|||0|||true|||-1511690080|||633,1115,1050,27
+W|||static text|||Options||||||true|||-1512308832|||595,1033,1200,40
+W|||static text|||Your iPhone has never been backed up to this computer.||||||true|||-1512345840|||1210,836,547,27
+W|||static text|||Latest Backup:||||||true|||-1512337616|||1210,803,547,27
+W|||button|||Restore Backup||||||false|||-1511755600|||1428,743,206,33
+W|||button|||Back Up Now||||||true|||-1511733760|||1210,743,206,33
+W|||static text|||Manually back up your iPhone to this computer or restore a backup stored on this computer.||||||true|||-1512349952|||1210,671,547,54
+W|||static text|||Manually Back Up and Restore||||||true|||-1512399296|||1210,638,547,27
+W|||button|||Change Password…||||||true|||-1511738128|||687,927,241,36
+W|||static text|||This will allow account passwords, Health, and HomeKit data to be backed up.||||||true|||-1512370512|||687,872,508,43
+W|||checkbox|||Encrypt local backup|||1|||true|||-1511742496|||660,842,212,27
+W|||static text|||A full backup of your iPhone will be stored on this computer.||||||true|||-1512403408|||660,776,531,54
+W|||radio button|||This Computer|||1|||true|||-1650122608|||633,746,154,27
+W|||static text|||Back up the most important data on your iPhone to iCloud.||||||true|||-1512374624|||660,707,531,27
+W|||radio button|||iCloud|||0|||true|||-1648849232|||633,677,81,27
+W|||static text|||Automatically Back Up||||||true|||-1512407520|||633,638,562,27
+W|||static text|||Backups||||||true|||-1512358176|||595,548,1200,40
+W|||button|||Serial Number: REDACTED||||||true|||-1640112640|||781,382,133,27
+W|||button|||Phone Number: REDACTED||||||true|||-1640153760|||788,349,30,27
+W|||static text|||Capacity: 59.58 GB||||||true|||-1640124976|||725,316,79,27
+W|||button|||Restore iPhone…||||||true|||-1511729392|||1447,435,218,32
+W|||button|||Check for Update||||||true|||-1511725024|||1211,434,224,33
+W|||static text|||Your iPhone software is up to date. iTunes will automatically check for an update again on 11/14/2026.||||||true|||-1512391072|||1211,349,556,55
+W|||button|||iOS 16.7.16||||||true|||-1512386960|||1211,316,556,27
+W|||pane|||Serial Number:||||||true|||-1640096192|||633,382,142,27
+W|||pane|||Phone Number:||||||true|||-1640149648|||633,349,149,27
+W|||pane|||Capacity:||||||true|||-1640133200|||633,316,86,27
+W|||static text|||iPhone 8||||||true|||-1512395184|||595,216,116,40
+W|||static text|||Free 30.62 GB ||||||true|||-1512987072|||999,949,456,32
+W|||static text|||Other 6.34 GB ||||||true|||-1512991280|||905,949,94,32
+W|||static text|||Documents & Data 5.43 GB ||||||true|||-1512592416|||825,949,80,32
+W|||static text|||Apps 11.08 GB 45 apps||||||true|||-1515858960|||661,949,164,32
+W|||static text|||Photos 1.63 GB 1153 photos||||||true|||-1516061056|||637,949,24,32
+W|||button|||Done||||||true|||-1511633296|||1642,949,110,32
+W|||button|||Sync||||||true|||-1638313952|||1476,949,145,32
+W|||pane|||||||||true|||-1514592352|||186,281,375,726
+W|||tree|||Device Sidebar|||Summary|||true|||-1515799904|||186,281,375,726
+W|||treeitem||||||0|||true||||||186,281,375,33
+W|||treeitem|||Summary|||1|||true||||||186,314,375,36
+W|||treeitem|||Music|||0|||true||||||186,350,375,36
+W|||treeitem|||Movies|||0|||true||||||186,386,375,36
+W|||treeitem|||TV Shows|||0|||true||||||186,422,375,36
+W|||treeitem|||Photos|||0|||true||||||186,458,375,36
+W|||treeitem|||Info|||0|||true||||||186,494,375,36
+W|||treeitem|||File Sharing|||0|||true||||||186,530,375,36
+W|||treeitem||||||0|||true||||||186,566,375,33
+W|||treeitem|||Videos|||0|||true||||||186,599,375,36
+W|||treeitem|||Music|||0|||true||||||186,635,375,36
+W|||treeitem|||Movies|||0|||true||||||186,671,375,36
+W|||treeitem|||TV Shows|||0|||true||||||186,707,375,36
+W|||treeitem|||Books|||0|||true||||||186,743,375,36
+W|||treeitem|||Audiobooks|||0|||true||||||186,779,375,36
+W|||treeitem|||Tones|||0|||true||||||186,815,375,36
+W|||custom|||||||||false||||||
+W|||pane|||Battery: 100 percent (Charging)||||||true|||-1640023248|||495,243,48,18
+W|||image|||64 GB||||||true|||-1522914592|||282,239,66,26
+W|||button|||eject||||||true|||-259393088|||516,202,27,27
+W|||text field|||Персик |||Персик |||true|||-259279472|||282,202,230,27
+W|||pane|||||||||true|||-1523039376|||955,140,103,38
+W|||radio button|||Персик |||1|||true|||-1517981504|||955,140,103,38
+W|||button|||Forward||||||false|||ITID:5001|||252,140,42,38
+W|||button|||Back||||||true|||ITID:5000|||213,140,41,38
+W|||text field|||Search||||||true|||-1523487072|||1433,45,266,47
+W|||button|||up next||||||true|||ITID:4002|||1348,47,68,46
+W|||group|||LCD section||||||true|||-1639184624|||679,36,655,68
+W|||slider|||volume|||100 percent|||true|||ITID:3003|||419,54,165,33
+W|||button|||next||||||false|||ITID:3002|||357,47,45,45
+W|||button|||play||||||false|||ITID:3001|||298,47,45,45
+W|||button|||previous||||||false|||ITID:3000|||239,47,45,45
+W|||menubar|||Application||||||true|||-1639727152|||186,104,1641,30
+W|||menu item|||Help||||||true|||-1637364368|||520,104,58,30
+W|||menu item|||Account||||||true|||-1637368224|||434,104,86,30
+W|||menu item|||Controls||||||true|||-1637372080|||347,104,87,30
+W|||menu item|||View||||||true|||-1637375936|||289,104,58,30
+W|||menu item|||Edit||||||true|||-1637379792|||238,104,51,30
+W|||menu item|||File||||||true|||-1639722432|||191,104,47,30
+W|||custom|||||||||true||||||
+COUNT|||87

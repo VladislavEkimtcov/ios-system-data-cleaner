@@ -428,9 +428,15 @@ a guessed coordinate. The agent should then:
 * **macOS (Finder):** take a vision snapshot to locate the control, bring the Finder device
   window forward, and act on it. `restorer.py ui-restore` stops with `code: agent_handoff` and a
   `step` (`open_device`, `choose_backup`, `continue`, `password_sheet`, `unexpected_sheet`, ...) when it declines to click.
-* **Windows (iTunes):** read the UI tree to find controls by name/role (e.g. "Back Up Now",
-  "Continue"); confirm the backup in the restore list matches the target device **before**
-  pressing Continue. No fixed pixel coordinates are used anywhere in the code.
+* **Windows (iTunes):** backups are `backup_runner.py` (idevicebackup2), exactly as on a Mac; the old
+  keystroke "Back Up Now" automation is gone. The restore: `restorer.py ui-restore` runs the same gates, then
+  (until the iTunes driver lands, TODO WD) refuses with `itunes_driver_not_ready` and you drive iTunes with the
+  OS-control MCP: "Restore from this backup", only the entry the dry run named, Continue; never "Restore
+  Backup..." on the Summary page. Record each screen with `python itunes_restore.py --accessible --dump --save <name>`
+  (`--accessible` restarts iTunes with Windows' screen-reader flag set only during start-up: without it iTunes hides
+  almost all its controls from UI Automation; never while a backup/restore runs; read-only otherwise, never shows a password) so the captures become the driver's test fixtures. A PC with no iTunes refuses with
+  `no_restore_app`, and `revive` / the backup's last lines say "do NOT erase yet". Proven passwords live in Windows
+  Credential Manager (`iOS Backup:<UDID>`); there is no Keychain Access to open, so never send the person looking.
 
 In all cases the escalation stops at the human gate (passcode, encryption password, physical
 erase confirmation).

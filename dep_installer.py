@@ -45,9 +45,13 @@ def get_apple_itunes_download_url() -> str:
     return APPLE_ITUNES_WIN64_URL if is_64 else APPLE_ITUNES_WIN32_URL
 
 
-# Verified GitHub Community Release for Windows libimobiledevice suite
-LIBIMOBILE_GITHUB_API = "https://api.github.com/repos/jrjr/libimobiledevice-windows/releases/latest"
-LIBIMOBILE_FALLBACK_URL = "https://github.com/jrjr/libimobiledevice-windows/releases/download/v20261101-74585f8/libimobile-suite-latest_w64.zip"
+# Pinned GitHub community release of the Windows libimobiledevice suite. A new release needs a deliberate bump
+# of all three constants: download it, compare the SHA-256 with the digest GitHub shows for the asset, then edit.
+# (v20261101: digest checked against GitHub's asset digest and byte-identical to the build used on the test PC.)
+LIBIMOBILE_TAG = "v20261101-74585f8"
+LIBIMOBILE_URL = ("https://github.com/jrjr/libimobiledevice-windows/releases/download/"
+                  f"{LIBIMOBILE_TAG}/libimobile-suite-latest_w64.zip")
+LIBIMOBILE_SHA256 = "b456e396866744190009d6193d6cc383e23473addd6f8b7f467de36d6abb631f"
 
 
 def is_admin() -> bool:
@@ -83,22 +87,30 @@ def download_file_with_progress(url: str, dest_path: Path, label: str = "Downloa
         total = int(resp.headers.get("Content-Length", 0))
         downloaded = 0
         chunk_size = 64 * 1024
+        # On a terminal, redraw one line in place. Captured output (an agent, CI, a log) gets one line per 10%:
+        # a \r redraw per chunk there was ~150 KB of text for one iTunes download.
+        live = sys.stdout.isatty()
+        next_mark = 10
         while True:
             chunk = resp.read(chunk_size)
             if not chunk:
                 break
             out_f.write(chunk)
             downloaded += len(chunk)
+            dl_mb = downloaded / (1024 * 1024)
             if total > 0:
                 pct = (downloaded / total) * 100.0
-                dl_mb = downloaded / (1024 * 1024)
-                tot_mb = total / (1024 * 1024)
-                sys.stdout.write(f"\r  {label}: {dl_mb:.1f} / {tot_mb:.1f} MB ({pct:.1f}%)")
-            else:
-                dl_mb = downloaded / (1024 * 1024)
+                text = f"  {label}: {dl_mb:.1f} / {total / (1024 * 1024):.1f} MB ({pct:.0f}%)"
+                if live:
+                    sys.stdout.write("\r" + text)
+                elif pct >= next_mark:
+                    sys.stdout.write(text + "\n")
+                    next_mark = (int(pct) // 10 + 1) * 10
+            elif live:
                 sys.stdout.write(f"\r  {label}: {dl_mb:.1f} MB")
             sys.stdout.flush()
-    sys.stdout.write("\n")
+    if live or total <= 0:
+        sys.stdout.write(f"\n" if live else f"  {label}: {downloaded / (1024 * 1024):.1f} MB\n")
 
 
 def compute_sha256(path: Path) -> str:
@@ -217,28 +229,14 @@ def install_cli_tools(
     if test_exe.exists() and not force:
         from win_tools import smoke_test_all_tools
         report = smoke_test_all_tools()
-        if report.get("all_tools_installed"):
+        if report.get("core_tools_installed"):
             return {
                 "status": "already_installed",
                 "message": f"CLI tools are already installed in {out_dir}",
                 "report": report,
             }
 
-    # Discover download URL (API or fallback)
-    dl_url = LIBIMOBILE_FALLBACK_URL
-    tag_name = "latest"
-    try:
-        req = urllib.request.Request(LIBIMOBILE_GITHUB_API, headers={"User-Agent": "phone-revival-setup"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-            tag_name = data.get("tag_name", "latest")
-            for a in data.get("assets", []):
-                if a.get("name", "").endswith("_w64.zip"):
-                    dl_url = a.get("browser_download_url", dl_url)
-                    break
-    except Exception:
-        dl_url = LIBIMOBILE_FALLBACK_URL
-
+    dl_url, tag_name = LIBIMOBILE_URL, LIBIMOBILE_TAG
     if progress_callback:
         progress_callback(f"Downloading libimobiledevice suite ({tag_name}) from GitHub...")
     else:
@@ -250,12 +248,14 @@ def install_cli_tools(
     try:
         download_file_with_progress(dl_url, tmp_zip, label="Downloading libimobile-suite")
 
-        # Print the SHA-256 so the operator can verify the download out-of-band. There is no
-        # publisher-signed checksum for this third-party build, so surface the hash rather
-        # than pretend it was verified.
+        # Nothing is extracted unless the archive is exactly the pinned one.
         digest = compute_sha256(tmp_zip)
-        print(f"  Downloaded archive SHA-256: {digest}")
-        print("  Verify this against the publisher's release notes before trusting the binaries.")
+        if digest.lower() != LIBIMOBILE_SHA256:
+            return {
+                "status": "error",
+                "message": (f"The downloaded archive does not match the pinned SHA-256 (got {digest}, expected "
+                            f"{LIBIMOBILE_SHA256}). Nothing was installed and the download was deleted."),
+            }
 
         if progress_callback:
             progress_callback(f"Extracting suite to {out_dir}...")
@@ -280,7 +280,8 @@ def install_cli_tools(
         # Smoke-test post installation
         from win_tools import smoke_test_all_tools
         report = smoke_test_all_tools()
-        passed = report.get("all_smoke_tests_passed", False)
+        # idevicerestore / irecovery are optional and not in this suite: judge by the core tools.
+        passed = report.get("core_smoke_tests_passed", False)
         return {
             "status": "success" if passed else "installed_with_warnings",
             "message": "libimobiledevice CLI suite installed successfully." if passed else "Tools installed, but some smoke tests failed.",
@@ -387,6 +388,17 @@ def install_mvt() -> Dict[str, Any]:
     }
 
 
+def install_proof_tool() -> Dict[str, Any]:
+    """Installs iOSbackup (pip), the fast tool that proves the backup password before an erase. Without a proof
+    tool the pre-erase gate stays closed. Works on Windows too (checked 2026-11-10, Python 3.12)."""
+    import password_tracker
+    if password_tracker.proof_tool_available():
+        return {"status": "already_installed"}
+    res = subprocess.run([sys.executable, "-m", "pip", "install", "iOSbackup"], check=False)
+    ok = res.returncode == 0 and password_tracker.proof_tool_available()
+    return {"status": "success" if ok else "failed", "returncode": res.returncode}
+
+
 def run_interactive_or_automated_setup(
     install_all: bool = False,
     yes: bool = False,
@@ -401,7 +413,7 @@ def run_interactive_or_automated_setup(
 
     # 1. Native CLI Suite Check
     report = smoke_test_all_tools()
-    tools_installed = report.get("all_tools_installed", False)
+    tools_installed = report.get("core_tools_installed", False)
     print(f"\n[1. NATIVE CLI SUITE (libimobiledevice)]")
     if tools_installed:
         print("  ✅ libimobiledevice CLI tools are already installed and smoke-tested.")
@@ -412,9 +424,21 @@ def run_interactive_or_automated_setup(
             res = install_cli_tools(consent=True)
             print(f"  Result: {res.get('message')}")
 
-    # 2. iTunes & AMDS Check
+    # 2. Password proof tool (the pre-erase gate needs it)
+    import password_tracker
+    print("\n[2. PASSWORD PROOF TOOL (iOSbackup)]")
+    if password_tracker.proof_tool_available():
+        print("  ✅ A password proof tool is installed.")
+    else:
+        print("  ❌ No password proof tool: the phone can't be cleared for erasing until one is installed.")
+        if install_all or yes or prompt_yes_no("  -> Install iOSbackup with pip?", default=True):
+            print(f"  Result: {install_proof_tool().get('status')}")
+
+    # 3. iTunes & AMDS Check
     it_status = check_itunes_installation()
-    print(f"\n[2. ITUNES & APPLE MOBILE DEVICE DRIVERS]")
+    print(f"\n[3. ITUNES & APPLE MOBILE DEVICE DRIVERS]")
+    if sys.platform == "win32":
+        print("  (Backups only need Apple Mobile Device Support. iTunes is needed for the RESTORE.)")
     if it_status.itunes_installed:
         print(f"  ✅ iTunes is installed ({it_status.install_type}, v{it_status.itunes_version}).")
         if it_status.amds_service_running:
@@ -442,7 +466,8 @@ if __name__ == "__main__":
     ensure_utf8_console()
     parser = argparse.ArgumentParser(description="Automated Dependency Installer for Phone Revival.")
     parser.add_argument("--tools", action="store_true", help="Install native libimobiledevice CLI tools.")
-    parser.add_argument("--itunes", action="store_true", help="Install iTunes.")
+    parser.add_argument("--itunes", action="store_true", help="Install iTunes (needed on Windows to RESTORE; backups only need Apple Mobile Device Support).")
+    parser.add_argument("--proof-tool", action="store_true", help="Install iOSbackup, which proves the backup password.")
     parser.add_argument("--all", "-a", action="store_true", help="Install all missing dependencies.")
     parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive mode (accept prompts).")
     args = parser.parse_args()
@@ -451,6 +476,8 @@ if __name__ == "__main__":
         # Without --yes, macOS only reports the choices; the agent relays them to the user.
         res = install_cli_tools(consent=args.yes)
         print(json.dumps(res, indent=2))
+    elif args.proof_tool:
+        print(json.dumps(install_proof_tool(), indent=2))
     elif args.itunes:
         res = install_itunes()
         print(json.dumps(res, indent=2))

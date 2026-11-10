@@ -231,6 +231,114 @@ def host_mount() -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Words for the person: "Mac"/"Finder" on macOS, "PC"/"iTunes" on Windows
+# ---------------------------------------------------------------------------
+
+def host_words(platform: Optional[str] = None) -> Dict[str, str]:
+    """The words messages use for this computer, so one string serves both platforms:
+    computer ("Mac"/"PC"), app (the restore app: "Finder"/"iTunes"), python (the command to type),
+    and keychain (where a proven password is kept)."""
+    plat = platform or sys.platform
+    if plat == "win32":
+        return {"computer": "PC", "app": "iTunes", "python": "python", "keychain": "Windows Credential Manager",
+                "tools_install": "`python dep_installer.py --tools --yes`"}
+    return {"computer": "Mac", "app": "Finder", "python": "python3", "keychain": "Keychain",
+            "tools_install": "`python3 dep_installer.py --tools --yes`, or run `brew install libimobiledevice` yourself"}
+
+
+# ---------------------------------------------------------------------------
+# Alerts: a sound and a banner for the person on the couch (macOS and Windows)
+# ---------------------------------------------------------------------------
+
+# macOS sound names used across the repo -> winsound.MessageBeep types (MB_ICONASTERISK, MB_OK, MB_ICONHAND,
+# MB_ICONEXCLAMATION). Unknown names get the plain MB_OK beep.
+_WIN_BEEPS = {"Ping": 0x40, "Glass": 0x0, "Hero": 0x0, "Basso": 0x10, "Funk": 0x30}
+
+# Toast through WinRT, with the classic tray balloon as the fallback. The text arrives in environment
+# variables, never interpolated into the script, so quotes or Cyrillic in a phone name can't break it.
+_WIN_TOAST_PS = r"""
+$ErrorActionPreference = 'Stop'
+$t = $env:IOSC_ALERT_TITLE; $m = $env:IOSC_ALERT_BODY
+try {
+  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+  $x = New-Object Windows.Data.Xml.Dom.XmlDocument
+  $x.LoadXml('<toast><visual><binding template="ToastGeneric"><text/><text/></binding></visual><audio silent="true"/></toast>')
+  $n = $x.GetElementsByTagName('text')
+  $n.Item(0).AppendChild($x.CreateTextNode($t)) | Out-Null
+  $n.Item(1).AppendChild($x.CreateTextNode($m)) | Out-Null
+  $app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show(
+    [Windows.UI.Notifications.ToastNotification]::new($x))
+  'TOAST'
+} catch {
+  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+  $i = New-Object System.Windows.Forms.NotifyIcon
+  $i.Icon = [System.Drawing.SystemIcons]::Information; $i.Visible = $true
+  $i.ShowBalloonTip(8000, $t, $m, 'Info'); Start-Sleep -Seconds 4; $i.Dispose()
+  'BALLOON'
+}
+"""
+
+
+def play_sound(sound_name: str) -> None:
+    """Plays a short alert sound without blocking. macOS: /System/Library/Sounds/<name>.aiff via afplay.
+    Windows: the matching system beep (winsound.MessageBeep) in a thread. Every failure is swallowed."""
+    if sys.platform == "win32":
+        def _beep() -> None:
+            try:
+                import winsound
+                winsound.MessageBeep(_WIN_BEEPS.get(sound_name, 0x0))
+            except Exception:  # noqa: BLE001
+                pass
+        import threading
+        threading.Thread(target=_beep, daemon=True).start()
+        return
+    sound_file = Path(f"/System/Library/Sounds/{sound_name}.aiff")
+    if sound_file.exists():
+        try:
+            subprocess.Popen(["afplay", str(sound_file)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def send_notification(message: str, title: str = "iPhone Revival", subtitle: str = "Backup Engine",
+                      sound: Optional[str] = None) -> Optional[str]:
+    """Shows a desktop banner. macOS: `display notification`. Windows: a toast (fallback: a tray balloon),
+    run in the background so it never blocks. Returns how it was sent ("osascript", "windows") or None."""
+    if sys.platform == "win32":
+        env = os.environ.copy()
+        env["IOSC_ALERT_TITLE"] = f"{title}: {subtitle}" if subtitle else title
+        env["IOSC_ALERT_BODY"] = message
+        try:
+            subprocess.Popen(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                 "-Command", _WIN_TOAST_PS],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return "windows"
+        except Exception:  # noqa: BLE001
+            return None
+    clean = lambda v: v.replace("\\", "\\\\").replace('"', '\\"')  # noqa: E731
+    script = f'display notification "{clean(message)}" with title "{clean(title)}" subtitle "{clean(subtitle)}"'
+    if sound:
+        script += f' sound name "{clean(sound)}"'
+    try:
+        subprocess.run(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2.0)
+        return "osascript"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def alert(message: str, title: str = "iPhone Revival", subtitle: str = "", sound: Optional[str] = None) -> None:
+    """One call for 'the person needs to know this now': a sound (if given) plus a banner, on macOS or Windows."""
+    if sound:
+        play_sound(sound)
+    send_notification(message, title=title, subtitle=subtitle)
+
+
+# ---------------------------------------------------------------------------
 # Native tool discovery
 # ---------------------------------------------------------------------------
 
@@ -288,7 +396,7 @@ def connected_udids() -> List[str]:
     idevice_id_bin = find_tool("idevice_id")
     if idevice_id_bin:
         try:
-            out = subprocess.check_output([str(idevice_id_bin), "-l"], stderr=subprocess.DEVNULL, text=True)
+            out = subprocess.check_output([str(idevice_id_bin), "-l"], stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
             return [line.strip() for line in out.splitlines() if line.strip()]
         except (OSError, subprocess.CalledProcessError):
             pass
@@ -333,7 +441,7 @@ def usb_ios_devices() -> Optional[List[str]]:
     try:
         if sys.platform == "darwin":
             out = subprocess.run(["ioreg", "-p", "IOUSB", "-l", "-w0"], capture_output=True,
-                                 text=True, timeout=10).stdout
+                                 text=True, encoding="utf-8", errors="replace", timeout=10).stdout
             for block in out.split("+-o "):
                 v = re.search(r'"idVendor" = (\d+)', block)
                 pr = re.search(r'"idProduct" = (\d+)', block)
@@ -374,7 +482,7 @@ def _pairing_state(idevicepair: Path, udid: str, prompt_trust: bool) -> str:
     def run(cmd: str) -> str:
         try:
             res = subprocess.run([str(idevicepair), "-u", udid, cmd], capture_output=True,
-                                 text=True, timeout=15)
+                                 text=True, encoding="utf-8", errors="replace", timeout=15)
         except Exception:
             return "ERROR: timeout"
         return (res.stdout + res.stderr).lower()
@@ -611,7 +719,7 @@ def _ideviceinfo(udid: Optional[str], *extra: str) -> Dict[str, str]:
         return {}
     cmd = [str(tool)] + (["-u", udid] if udid else []) + list(extra)
     try:
-        return _parse_kv(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, timeout=10))
+        return _parse_kv(subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace", timeout=10))
     except (OSError, subprocess.SubprocessError):
         return {}
 
@@ -654,6 +762,37 @@ def device_setup_verdict(udid: Optional[str] = None) -> Dict[str, Any]:
             why = "it has an erase record, but that survives a restore, and the phone has its own name and is activated"
         return {**base, "verdict": "unknown", "reasons": [why]}
     return {**base, "verdict": "hello", "reasons": strong + (["the phone has an erase record"] if oblit else [])}
+
+
+def process_running(*names: str) -> bool:
+    """Is any process with one of these names running? macOS/Linux: `pgrep -f` (matches the command line).
+    Windows: `tasklist` image names (".exe" added when missing). Never raises; False when it can't tell."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, errors="replace",
+                                 timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            running = {line.split('","', 1)[0].strip('"').lower() for line in out.splitlines() if line}
+            wanted = {(n if n.lower().endswith(".exe") else n + ".exe").lower() for n in names}
+            return bool(running & wanted)
+        return subprocess.run(["pgrep", "-f", "|".join(names)], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+MIN_BACKUP_FREE_GB = 20.0
+NON_COW_SPACE_FACTOR = 2.2  # the new backup + its full safety copy, plus 10% headroom
+
+
+def space_needed_gb(estimate_bytes: Optional[int], platform: Optional[str] = None) -> Tuple[float, str]:
+    """Free space a backup cycle needs, with the reason in plain words. On a Mac (APFS) the safety copy is a
+    copy-on-write clone that costs ~nothing, so a flat 20 GB is enough. On Windows (NTFS) it is a full copy:
+    the new backup plus its copy, about 2.2x the backup (the previous backup is only renamed aside)."""
+    plat = platform or sys.platform
+    if plat == "darwin" or not estimate_bytes:
+        return MIN_BACKUP_FREE_GB, "a fixed minimum"
+    est_gb = estimate_bytes / GB
+    need = max(MIN_BACKUP_FREE_GB, round(est_gb * NON_COW_SPACE_FACTOR, 1))
+    return need, f"the backup, about {est_gb:.1f} GB, plus its full safety copy"
 
 
 def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
@@ -711,12 +850,16 @@ def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
                 raise CloneError(f"cp clone failed: {res.stderr.strip() or res.stdout.strip()}")
         elif sys.platform == "win32":
             res = subprocess.run(
-                ["robocopy", str(src), str(staging), "/E", "/COPY:DAT", "/R:1", "/W:1", "/NFL", "/NDL", "/NP"],
-                capture_output=True, text=True,
+                ["robocopy", str(src), str(staging), "/E", "/COPY:DAT", "/DCOPY:T", "/XJ", "/MT:8",
+                 "/R:1", "/W:1", "/NFL", "/NDL", "/NP", "/NJH", "/NJS"],
+                capture_output=True, text=True, errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             # robocopy exit codes < 8 indicate success (0-7 are informational).
+            if verbose or res.returncode:
+                print(f"  (robocopy exit {res.returncode}: {'ok' if res.returncode < 8 else 'FAILED'})")
             if res.returncode >= 8:
-                raise CloneError(f"robocopy clone failed (exit {res.returncode})")
+                raise CloneError(f"robocopy clone failed (exit {res.returncode}): {(res.stdout or '')[-300:].strip()}")
         else:
             shutil.copytree(src, staging, symlinks=True)
 

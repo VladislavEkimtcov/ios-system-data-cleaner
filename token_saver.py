@@ -350,7 +350,7 @@ def wrap_command(cmd_args: List[str], max_lines: int = 50) -> Tuple[str, int, To
     proc = subprocess.run(
         cmd_args,
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     combined_raw = proc.stdout + ("\n" + proc.stderr if proc.stderr else "")

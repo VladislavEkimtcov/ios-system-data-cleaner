@@ -70,7 +70,7 @@ def detect_apple_pnp_devices() -> List[ConnectedUSBDevice]:
         proc = subprocess.run(
             ["powershell", "-NoProfile", "-Command", cmd],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
             timeout=8,
         )
@@ -129,7 +129,7 @@ def smoke_test_tool(tool_name: str) -> ToolStatus:
         proc = subprocess.run(
             [str(tool_path), "--version"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
             timeout=5,
         )
@@ -152,7 +152,7 @@ def smoke_test_tool(tool_name: str) -> ToolStatus:
         proc = subprocess.run(
             [str(tool_path), "--help"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
             timeout=5,
         )
@@ -213,7 +213,7 @@ def smoke_test_all_tools() -> Dict[str, Any]:
             proc = subprocess.run(
                 [str(idevice_id_path), "-l"],
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 check=False,
                 timeout=5,
             )

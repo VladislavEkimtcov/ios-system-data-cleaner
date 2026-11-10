@@ -70,11 +70,11 @@ def detect_connected_apple_devices() -> Dict[str, Any]:
     ideviceinfo_bin = find_tool("ideviceinfo")
     if idevice_id_bin:
         try:
-            proc = subprocess.run([str(idevice_id_bin), "-l"], capture_output=True, text=True, timeout=5, check=False)
+            proc = subprocess.run([str(idevice_id_bin), "-l"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False)
             for udid in [l.strip() for l in proc.stdout.splitlines() if l.strip()]:
                 info: Dict[str, Any] = {"udid": udid, "source": "libimobiledevice"}
                 if ideviceinfo_bin:
-                    ip = subprocess.run([str(ideviceinfo_bin), "-u", udid], capture_output=True, text=True, timeout=5, check=False)
+                    ip = subprocess.run([str(ideviceinfo_bin), "-u", udid], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, check=False)
                     for line in ip.stdout.splitlines():
                         if ":" in line:
                             k, v = line.split(":", 1)
@@ -377,20 +377,33 @@ def get_backup_progress() -> Dict[str, Any]:
 
 def drive_itunes_backup(udid: Optional[str] = None) -> Dict[str, Any]:
     """
-    Drive iTunes on Windows to take a backup, monitoring until Status.plist reports
-    'finished', then verify it. A backup is non-destructive and stops at the human
-    passcode/encryption gate.
+    Start a whole new backup with the backup engine (backup_runner.py) in the background, on macOS or
+    Windows (the name is historical: iTunes is no longer driven by keystrokes). Non-destructive: the
+    previous backup is kept, and the run stops at the phone's passcode prompt until the person types it.
+    Follow it with get_backup_progress (or `backup_runner.py --watch`).
 
     Args:
         udid: Device UDID (defaults to the single connected device).
     """
-    if sys.platform != "win32":
-        return {"error": "iTunes desktop automation is only available on Windows."}
-    target_udid = udid or (connected_udids()[0] if connected_udids() else None)
+    udids = connected_udids()
+    if len(udids) > 1 and not udid:
+        return {"error": "More than one phone is plugged in. Unplug the others or pass udid."}
+    target_udid = udid or (udids[0] if udids else None)
     if not target_udid:
-        return {"error": "No connected device and no --udid provided."}
-    from itunes_automation import ITunesAutomation
-    return ITunesAutomation().drive_full_backup_workflow(target_udid)
+        return {"error": "No connected device and no udid provided."}
+    from backup_progress import describe, read_status
+    current = describe(read_status())
+    if current.get("running"):
+        return {"error": "A backup is already running.", "progress": current}
+    cmd = [sys.executable, str(Path(__file__).resolve().parent / "backup_runner.py"), "--udid", target_udid]
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            creationflags=flags, start_new_session=(sys.platform != "win32"))
+    return {"started": True, "pid": proc.pid, "udid": target_udid,
+            "next": "Poll get_backup_progress every 1-2 minutes; tell the person to enter the passcode on the "
+                    "phone when the phase is waiting_passcode."}
 
 
 # ---------------------------------------------------------------------------

@@ -35,6 +35,12 @@ if not defined PY_CMD (
     exit /b 1
 )
 
+REM CI / self-check: prove the Python probe above works, then stop (no phone, no pause).
+if defined REVIVE_PROBE_ONLY (
+    echo PYTHON_OK: %PY_CMD%
+    exit /b 0
+)
+
 REM 2. Detect System Architecture (64-bit vs 32-bit)
 if defined PROCESSOR_ARCHITEW6432 (
     set ITUNES_URL=https://www.apple.com/itunes/download/win64
@@ -50,14 +56,15 @@ if defined PROCESSOR_ARCHITEW6432 (
     set ARCH_BITS=32-bit
 )
 
-REM 3. Run Master Revival Control Plane with Windows-MCP Autopilot
-%PY_CMD% iphone_manager.py revive --auto-drive %*
+REM 3. The revival pipeline: new backup, verification, safety copy, then the erase instructions.
+REM    Exit 2 = the backup is safe but this PC has nothing to restore with (iTunes missing): don't erase yet.
+%PY_CMD% iphone_manager.py revive %*
 set REVIVE_EXIT=%errorlevel%
 
 if %REVIVE_EXIT% equ 2 (
     echo.
     echo ----------------------------------------------------------------------
-    echo [!] Official iTunes is required to communicate with your iPhone on Windows.
+    echo [!] Your backup is safe, but do NOT erase the phone yet: iTunes is needed to put it back.
     echo     Detected Architecture: %ARCH_BITS%
     echo     Direct Apple Link:     !ITUNES_URL!
     echo.

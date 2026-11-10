@@ -29,6 +29,7 @@ from common import (
     device_setup_verdict,
     diagnose_connection,
     find_tool,
+    host_words,
     _plausible_backup,
     _backup_date,
 )
@@ -37,11 +38,13 @@ PREWIPE = "-prewipe"
 MIN_BATTERY_PCT = 15
 MIN_HOST_FREE_GB = 5
 
+WORDS = host_words()
+
 # What to tell the person whenever they are asked to erase the phone. Agents must ALWAYS say all of it.
 ERASE_STEPS = ("On the phone: Settings > General > Transfer or Reset iPhone > Erase All Content and Settings. "
                "When it offers to back up to iCloud first (\"Finish Uploading Then Erase\" or similar), choose "
-               "\"Skip Backup\" / \"Erase Now\": your full backup is already on this Mac, and the cloud upload can "
-               "take a very long time. If asked about cellular plans, choose \"Keep eSIMs and Erase Data\".")
+               "\"Skip Backup\" / \"Erase Now\": your full backup is already on this {computer}, and the cloud upload can "
+               "take a very long time. If asked about cellular plans, choose \"Keep eSIMs and Erase Data\".").format(**WORDS)
 ERASE_WARNING = ("Heads up: while it erases, the phone's screen can be slow or stop responding for a minute or "
                  "two. That's normal. Give it time instead of tapping repeatedly, and don't unplug it.")
 
@@ -193,7 +196,7 @@ def _facts_line(f: Dict[str, Any]) -> str:
 
 
 def available_backups(udid: str, chosen: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Every backup folder on this Mac that belongs to this phone, in plain terms, with the one that
+    """Every backup folder on this computer that belongs to this phone, in plain terms, with the one that
     will be restored marked. Finder's own timestamped working copies are listed too."""
     root = backup_root(udid)
     out: List[Dict[str, Any]] = []
@@ -281,6 +284,44 @@ def choose_source(udid: str, which: str = "auto") -> Optional[Dict[str, Any]]:
 # The gates
 # ---------------------------------------------------------------------------
 
+def restore_route() -> Dict[str, Any]:
+    """What this computer restores with: {"kind", "exe", "version"}. macOS: Finder (always there). Windows: iTunes
+    (Win32 or Store) or the Apple Devices app, or kind None when nothing is installed. Never raises."""
+    try:
+        from itunes_env import restore_app
+        return restore_app()
+    except Exception as e:  # noqa: BLE001
+        return {"kind": None, "exe": None, "version": None, "error": str(e)}
+
+
+def no_restore_app_refusal(route: Optional[Dict[str, Any]] = None, before_erase: bool = True) -> Dict[str, Any]:
+    """No app on this computer can put a backup back on the phone. before_erase (revive, the end of a backup): the
+    person must not erase yet. Otherwise (the restore dry run): the phone may already be erased, so say what to do."""
+    if before_erase:
+        msg = (f"Your backup is safe, but do NOT erase the phone yet: this {WORDS['computer']} has no app that can put "
+               "the backup back on the phone (iTunes is not installed).")
+    else:
+        msg = (f"This {WORDS['computer']} has no app that can put the backup back on the phone (iTunes is not "
+               "installed), so I can't restore here yet. Your backup is safe.")
+    return refusal(
+        "no_restore_app",
+        msg,
+        [{"id": "install_itunes",
+          "label": "Install iTunes from Apple first (I can open Apple's download page: "
+                   f"`{WORDS['python']} dep_installer.py --itunes`). It takes about 5 minutes and needs your OK on "
+                   "the Windows installer prompt."},
+         {"id": "restore_on_mac", "label": "Do the restore on a Mac instead (copy the backup there first)."},
+         STOP_OPTION],
+        route=route,
+    )
+
+
+def check_restore_route(before_erase: bool = True) -> Optional[Dict[str, Any]]:
+    """None when a restore app is present, else the no_restore_app refusal."""
+    route = restore_route()
+    return None if route.get("kind") else no_restore_app_refusal(route, before_erase=before_erase)
+
+
 def check_preconditions(udid: Optional[str] = None, source: str = "auto",
                         max_age_hours: float = 48.0, allow_unactivated: bool = False) -> Dict[str, Any]:
     """Runs every safety gate without touching the phone. Returns {"ok": True, "plan": ...}
@@ -288,11 +329,14 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
     if not find_tool("ideviceinfo"):
         return refusal(
             "tools_missing",
-            "The small helper tools that talk to the iPhone aren't installed on this Mac yet.",
-            [{"id": "install_tools", "label": "Let me install them (run `python3 dep_installer.py --tools --yes`), "
-                                              "or run `brew install libimobiledevice` yourself."},
+            f"The small helper tools that talk to the iPhone aren't installed on this {WORDS['computer']} yet.",
+            [{"id": "install_tools", "label": f"Let me install them (run {WORDS['tools_install']})."},
              STOP_OPTION],
         )
+
+    no_route = check_restore_route(before_erase=False)
+    if no_route:
+        return no_route
 
     udids = connected_udids()
     if len(udids) > 1:
@@ -333,10 +377,12 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
         # ("Could not start service com.apple.mobilebackup2: Invalid service").
         return refusal(
             "phone_not_activated",
-            "The phone isn't activated yet. Your Mac activates it by itself once the phone is opened in Finder.",
+            f"The phone isn't activated yet. Your {WORDS['computer']} activates it by itself once the phone is opened "
+            f"in {WORDS['app']}.",
             [{"id": "activate_via_finder",
-              "label": "Let me open the phone in Finder for a minute so your Mac activates it "
-                       "(I run `python3 restorer.py activate`; the restore does this step itself)."},
+              "label": f"Let me open the phone in {WORDS['app']} for a minute so your {WORDS['computer']} activates it "
+                       + ("(I run `python3 restorer.py activate`; the restore does this step itself)."
+                          if WORDS["app"] == "Finder" else "(I open iTunes and select the phone).")},
              {"id": "activate_on_phone",
               "label": "Activate it on the phone: choose your language and region, join Wi-Fi, and wait for "
                        "'Activating iPhone' to finish. Stop at the 'Apps & Data' screen and tell me."},
@@ -347,7 +393,7 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
     src = choose_source(target, source)
     if not src:
         return refusal("no_backup",
-                       "I can't find a backup for this phone on this Mac.",
+                       f"I can't find a backup for this phone on this {WORDS['computer']}.",
                        [{"id": "other_mac", "label": "The backup is on another computer: connect that one and run this there."}, STOP_OPTION])
     if src["problems"]:
         return refusal("backup_unusable",
@@ -384,7 +430,7 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
     free_gb = shutil.disk_usage(str(backup_root(target))).free / 1e9
     if free_gb < MIN_HOST_FREE_GB:
         return refusal("mac_disk_full",
-                       f"This Mac has only {free_gb:.1f} GB free. Free up a few GB first.",
+                       f"This {WORDS['computer']} has only {free_gb:.1f} GB free. Free up a few GB first.",
                        [{"id": "retry", "label": "Tell me when there's more space."}, STOP_OPTION])
 
     warnings: List[str] = []

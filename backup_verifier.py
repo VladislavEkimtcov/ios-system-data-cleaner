@@ -283,10 +283,15 @@ def print_remediation_guide(
         print(f"        python3 iphone_manager.py verify --udid {udid} --password \"<YOUR_PASSWORD>\"")
         print("     2. Or run interactive password hunter to test variants or inspect history:")
         print(f"        python3 iphone_manager.py passwords --udid {udid} --cli")
-        print("     3. Or inspect stored passwords in macOS Keychain Access:")
-        print("        Run: python3 -c \"import password_tracker; password_tracker.open_keychain_ui()\"")
+        if sys.platform != "darwin":
+            print("     3. Or open the password helper page (tries what you remember and common variations):")
+            print(f"        python password_tracker.py --udid {udid} --exit-on-success")
+            print("        (Windows Credential Manager never shows a saved backup password, so there is nothing to look up.)")
+        else:
+            print("     3. Or inspect stored passwords in macOS Keychain Access:")
+            print("        Run: python3 -c \"import password_tracker; password_tracker.open_keychain_ui()\"")
 
-        if steer_ui or (interactive and sys.stdin.isatty()):
+        if sys.platform == "darwin" and (steer_ui or (interactive and sys.stdin.isatty())):
             try:
                 import password_tracker
                 if password_tracker.open_keychain_ui():
@@ -303,7 +308,7 @@ def print_remediation_guide(
         print("        idevicebackup2 encryption on")
         print("        idevicebackup2 backup \"$HOME/Library/Application Support/MobileSync/Backup\"")
 
-        if steer_ui or (interactive and sys.stdin.isatty()):
+        if sys.platform == "darwin" and (steer_ui or (interactive and sys.stdin.isatty())):
             try:
                 subprocess.run(["osascript", "-e", 'tell application "Finder" to activate'], capture_output=True, timeout=5)
                 print("     👉 UI Steered: Brought macOS Finder forward.")

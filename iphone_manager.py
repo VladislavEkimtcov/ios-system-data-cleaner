@@ -34,7 +34,6 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from backup_verifier import find_backup_for_target
 from token_saver import TokenCompactor, TokenDoctor, estimate_tokens, wrap_command
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -166,97 +165,49 @@ def cmd_token_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_detect_wipe(args: argparse.Namespace) -> int:
-    """Deterministically detects if the connected device is in post-erase state and ready for restore."""
-    from itunes_automation import ITunesAutomation
-    driver = ITunesAutomation()
-    udid = getattr(args, "udid", None)
-    status = driver.detect_device_wipe_state(udid)
-
+    """Is the phone at the 'Hello' screen (erased, ready to restore)? Uses the phone's own setup state, the
+    same check the restore gates use. Exit 0 = Hello, 1 = not (or can't tell)."""
+    from common import device_setup_verdict, host_words
+    v = device_setup_verdict(getattr(args, "udid", None))
+    labels = {"hello": "✅ ERASED: at the 'Hello' screen, ready to restore",
+              "set_up": "ℹ️  SET UP: the phone has its data (not erased)",
+              "unknown": "⚠️  CAN'T TELL (treat as not erased)"}
     print("=" * 65)
-    print("       POST-WIPE & RESTORE READINESS DETECTION REPORT")
+    print("       IS THE PHONE ERASED AND READY TO RESTORE?")
     print("=" * 65)
-    verdict_str = "✅ POST-WIPE CONFIRMED (Ready to Restore)" if status["is_wiped"] else "ℹ️  PRE-WIPE / NORMAL OPERATION"
-    print(f"  Device Status:        {verdict_str}")
-    print(f"  Connected Device:     {status['current_device_name'] or 'N/A'}")
-    print(f"  Backup Device Target: {status['backup_device_name'] or 'N/A'}")
-    print(f"  UDID:                 {status['udid'] or 'N/A'}")
-    print(f"  Password Protected:   {'YES' if status['password_protected'] else 'not reported (unreliable; not proof of a Hello screen)'}")
-    print(f"  Activation State:     {status['activation_state'] or 'N/A'}")
-    if status.get("obliteration"):
-        print(f"  NVRAM Obliteration:   {status['obliteration']}")
-    print(f"  iTunes UI Screen:     {status['ui_state']}")
-
-    print("\n  Detection Verdict Evidence:")
-    for r in status["reasons"]:
+    print(f"  Verdict:          {labels.get(v['verdict'], v['verdict'])}")
+    print(f"  Phone name now:   {v.get('device_name') or 'N/A'}")
+    print(f"  Setup state:      {v.get('setup_state') or '(none)'}")
+    print(f"  Activation state: {v.get('activation_state') or 'N/A'}")
+    print("  Why:")
+    for r in v.get("reasons", []):
         print(f"    • {r}")
-
-    if status["is_wiped"]:
-        print("\n  👉 RECOMMENDED ACTION:")
-        print(f"     Run 'python iphone_manager.py itunes --restore' to actuate iTunes restore")
-        print(f"     from backup '{status['backup_device_name']}'.")
+    if v["verdict"] == "hello":
+        print(f"\n  👉 Next: {host_words()['python']} restorer.py ui-restore   (dry run first; it drives the restore)")
     print("=" * 65)
-    return 0 if status["is_wiped"] else 1
+    return 0 if v["verdict"] == "hello" else 1
+
+
+def _run_backup_engine(udid: Optional[str] = None) -> int:
+    from backup_runner import BackupRunner
+    return 0 if BackupRunner(udid=udid).execute() else 1
 
 
 def cmd_itunes(args: argparse.Namespace) -> int:
-    """Checks and enforces iTunes Windows environment, MobileSync paths, and drives UI automation."""
+    """iTunes / Apple Devices environment report on Windows. Backups go through the backup engine
+    (idevicebackup2); restores through `restorer.py ui-restore`. No keystroke automation."""
+    from common import host_words
     if getattr(args, "detect_wipe", False):
         return cmd_detect_wipe(args)
-
-    if getattr(args, "actuate", False):
-        from itunes_automation import ITunesAutomation
-        driver = ITunesAutomation()
-        ok = driver.actuate_backup_ui()
-        print(f"iTunes backup actuation: {'✅ Sent' if ok else '❌ Failed'}")
-        return 0 if ok else 1
-
     if getattr(args, "restore", False):
-        from itunes_automation import ITunesAutomation
-        driver = ITunesAutomation()
-        ok = driver.actuate_restore_ui()
-        print(f"iTunes restore actuation: {'✅ Sent' if ok else '❌ Failed'}")
-        return 0 if ok else 1
-
-    if getattr(args, "drive", False) or getattr(args, "auto_backup", False):
-        from storage_monitor import run_ideviceinfo
-        info = run_ideviceinfo()
-        udid = info.get("UniqueDeviceID")
-        if not udid:
-            from win_tools import detect_apple_pnp_devices
-            pnp = detect_apple_pnp_devices()
-            for p in pnp:
-                if len(p.instance_id) >= 40:
-                    udid = p.instance_id[-40:].lower()
-                    break
-        if not udid:
-            from common import diagnose_connection
-            print(f"❌ {diagnose_connection()['message']}", file=sys.stderr)
-            return 1
-        from itunes_automation import ITunesAutomation
-        driver = ITunesAutomation()
-        res = driver.drive_full_backup_workflow(udid)
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("status") == "success" else 1
-
+        print("The blind iTunes restore was removed (it pressed Enter on whatever had focus). Restore with:\n"
+              f"  {host_words()['python']} restorer.py ui-restore   (dry run first)", file=sys.stderr)
+        return 2
+    if getattr(args, "drive", False) or getattr(args, "actuate", False):
+        return _run_backup_engine(getattr(args, "udid", None))
     if getattr(args, "monitor", False):
-        from storage_monitor import run_ideviceinfo
-        info = run_ideviceinfo()
-        udid = info.get("UniqueDeviceID")
-        if not udid:
-            from win_tools import detect_apple_pnp_devices
-            pnp = detect_apple_pnp_devices()
-            for p in pnp:
-                if len(p.instance_id) >= 40:
-                    udid = p.instance_id[-40:].lower()
-                    break
-        if not udid:
-            from common import diagnose_connection
-            print(f"❌ {diagnose_connection()['message']}", file=sys.stderr)
-            return 1
-        from itunes_automation import ITunesAutomation
-        driver = ITunesAutomation()
-        prog = driver.monitor_backup(udid)
-        return 0 if prog.state == "finished" else 1
+        from backup_progress import watch
+        return watch(None)
 
     from itunes_env import print_itunes_report
     print_itunes_report(install=args.install, yes=args.yes)
@@ -317,135 +268,123 @@ def cmd_tokens(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_revive(args: argparse.Namespace) -> int:
-    """One-touch revival pipeline: inspects, runs the full pre-erase gate, clones, and stages restore."""
-    import shutil
+def _existing_backup_gate(udid: str) -> Optional[Path]:
+    """--use-existing: the phone's current backup must pass the full pre-erase gate (fresh, finished, encrypted,
+    password proven); then the safety copy, labels and the backup list, exactly as after a new backup."""
     from backup_verifier import inspect_backup
-    from common import CloneError, host_mount, make_prewipe_clone, state_path
-    from itunes_env import check_itunes_installation, get_apple_itunes_download_url
-    from storage_monitor import run_ideviceinfo
-    from win_tools import detect_apple_pnp_devices
+    from common import CloneError, backup_root, make_prewipe_clone
+    live = backup_root(udid) / udid
+    if not live.is_dir():
+        print("  🚨 There is no backup of this phone on this computer yet. Run without --use-existing to take one.")
+        return None
+    if not inspect_backup(live, max_age_hours=24.0, interactive=False):
+        print("\n  ❌ Pre-erase gate FAILED for the existing backup. Phone erase is BLOCKED. "
+              "Run without --use-existing to take a fresh one.", file=sys.stderr)
+        return None
+    try:
+        clone = make_prewipe_clone(live)
+    except CloneError as e:
+        print(f"  ❌ Safety copy failed: {e}", file=sys.stderr)
+        return None
+    print(f"  ✅ Safety copy: {clone.name}")
+    try:
+        from backup_labels import ensure_labels
+        ensure_labels(udid, say=lambda m: print(f"  🏷️  {m}"))
+        import backup_manager as bm
+        listed, free = bm.list_backups(udid), bm.free_gb(udid)
+        for ln in bm.describe(listed, bm.propose_moves(listed, free), bm.other_phones(udid), free):
+            print("  " + ln)
+    except Exception as e:  # noqa: BLE001
+        print(f"  (couldn't list the backups: {e})")
+    return live
 
+
+def cmd_revive(args: argparse.Namespace) -> int:
+    """One-touch revival, the same sequence on macOS and Windows: a whole new backup (the previous one is kept;
+    rolled back on failure) -> verification + proof of password -> safety copy -> backup list with the 0-app
+    warning -> 'can this computer restore?' gate -> the erase instructions. Exit 0 = ready to erase,
+    1 = something failed (nothing on the phone was changed), 2 = backup is safe but don't erase (no restore app)."""
+    import restore_gates as gates
+    from common import backup_root, diagnose_connection, host_words, state_path
+
+    words = host_words()
     print("=" * 70)
     print("       PHONE REVIVAL: ONE-TOUCH RESTORATION PIPELINE")
     print("=" * 70)
 
-    # 1. Host Storage Verification
-    mount = host_mount()
-    stat = shutil.disk_usage(str(mount))
-    free_gb = stat.free / (1000**3)
-    print(f"\n[1/4] HOST STORAGE CHECK ({mount})")
-    print(f"  Free Storage: {free_gb:.1f} GB")
-    if free_gb < 20.0:
-        print("  ❌ INSUFFICIENT DISK SPACE: At least 20 GB free required for the safety clone.", file=sys.stderr)
+    # 1. The phone answering is the truth; the Apple service is consulted only to explain a failure.
+    print("\n[1/5] CONNECTION")
+    diag = diagnose_connection()
+    if not diag["ready"]:
+        print(f"  👉 {diag['message']}")
+        if sys.platform == "win32" and diag["state"] in ("no_usb_device", "usb_not_listed", "lockdown_unreachable"):
+            try:
+                from itunes_env import check_itunes_installation
+                st = check_itunes_installation()
+                if not st.amds_service_installed:
+                    print("  (Apple's phone driver, 'Apple Mobile Device Support', isn't installed. Installing iTunes "
+                          f"brings it: {words['python']} dep_installer.py --itunes)")
+                elif not st.amds_service_running:
+                    print("  (The 'Apple Mobile Device Service' is installed but stopped; restarting the PC usually starts it.)")
+            except Exception:  # noqa: BLE001
+                pass
         return 1
-    print("  ✅ Host storage buffer confirmed adequate.")
+    udids = diag.get("udids") or []
+    if len(udids) > 1:
+        print("  🛑 More than one iPhone/iPad is plugged in. Unplug all but the one to revive, then run this again.")
+        return 1
+    udid = udids[0] if udids else None
+    print(f"  ✅ {diag['message']}")
 
-    # 2. Driver & Daemon Subsystem
-    print("\n[2/4] USB & APPLE DRIVER SUBSYSTEM")
-    it_status = check_itunes_installation()
-    pnp_devices = detect_apple_pnp_devices()
+    route_refusal = gates.check_restore_route()
+    if route_refusal:
+        print(f"  ⚠️  {route_refusal['message']} I'll still take and check the backup (that is always safe).")
 
-    if pnp_devices:
-        for d in pnp_devices:
-            print(f"  📱 Hardware Connected: {d.name} [{d.mode}]")
-    else:
-        print("  ⚠️ No Apple device detected on USB. Please plug in your iPhone.")
-
-    info = run_ideviceinfo()
-    if not info:
-        print("  ⚠️ iOS service daemon handshake not established.")
-        if sys.platform == "win32" and not it_status.amds_service_running:
-            dl_url = get_apple_itunes_download_url()
-            print("\n  🚨 ACTION REQUIRED: OFFICIAL ITUNES & APPLE USB DRIVERS MISSING")
-            print("  Windows requires official iTunes and Apple Mobile Device Support to communicate with iOS.")
-            print("  Please download and install official iTunes for Windows directly from Apple:")
-            print(f"    👉 {dl_url}")
-            print("  Once installed, re-run this command to proceed automatically!")
-            return 2
-        else:
-            from common import diagnose_connection
-            print(f"  👉 {diagnose_connection()['message']}")
+    # 2. Backup + verification + safety copy + backup list (the engine does all of it).
+    print("\n[2/5] BACKUP, VERIFICATION AND SAFETY COPY")
+    if getattr(args, "use_existing", False):
+        if not udid or not _existing_backup_gate(udid):
             return 1
+    else:
+        if _run_backup_engine(udid) != 0:
+            print("\n  ❌ The backup did not finish or did not pass verification. Phone erase is BLOCKED; "
+                  "nothing on the phone was changed.", file=sys.stderr)
+            return 1
+    if not udid:
+        udid = (diagnose_connection().get("udids") or [None])[0]
+    backup = backup_root(udid) / udid
 
-    udid = info.get("UniqueDeviceID")
-    product_type = info.get("ProductType")
-    ios_version = info.get("ProductVersion")
-    build_version = info.get("BuildVersion")
-    device_name = info.get("DeviceName", "iPhone")
-
-    print(f"  ✅ Device Connected & Authenticated: {device_name}")
-    print(f"     Identifier:   {product_type}")
-    print(f"     Current iOS:  {ios_version} (Build {build_version})")
-    print(f"     UDID:         {udid}")
-
-    # 3. Full pre-erase verification gate + immutable safety clone.
-    print("\n[3/4] BACKUP INTEGRITY GATE & SAFETY CLONE")
-    backup = find_backup_for_target(udid)
-    if not backup and getattr(args, "auto_drive", False):
-        print("  🚀 AUTO-DRIVE: Launching automated iTunes backup autopilot (Windows-MCP)...")
-        from itunes_automation import ITunesAutomation
-        driver = ITunesAutomation()
-        driver.drive_full_backup_workflow(udid)
-        backup = find_backup_for_target(udid)
-
-    if not backup:
-        print(f"  🚨 No existing backup found for UDID {udid}.")
-        print("  Open iTunes/Finder, check 'Encrypt local backup', and click 'Back Up Now' first.")
-        print("  (Or re-run with: python iphone_manager.py revive --auto-drive to automate it!)")
-        return 1
-
-    # Run the SAME full gate as `verify` (freshness, SnapshotState, Manifest.db, encryption,
-    # size/file-count, and proof of password) — not just an is_encrypted check.
-    gate_ok = inspect_backup(Path(backup.backup_path), max_age_hours=24.0, interactive=False)
-    if not gate_ok:
-        print("\n  ❌ Pre-erase gate FAILED. Phone erase is BLOCKED. Resolve the items above and re-run.",
-              file=sys.stderr)
-        return 1
-
+    # 3. Token manifest (sealed in the private state dir), for the after-restore comparison.
+    print("\n[3/5] 2FA / KEYCHAIN INVENTORY")
+    prewipe_token_path = state_path(f"{udid}-tokens-prewipe.json")
     try:
-        prewipe_clone = make_prewipe_clone(Path(backup.backup_path))
-    except CloneError as e:
-        print(f"  ❌ Safety clone failed: {e}", file=sys.stderr)
-        return 1
-    print(f"  ✅ Immutable pre-wipe clone: {prewipe_clone.name}")
-    from backup_labels import ensure_labels
-    ensure_labels(backup.udid, say=lambda m: print(f"  🏷️  {m}"))   # distinct names in Finder's restore pop-up
+        from token_extractor import extract_all_tokens
+        tm = extract_all_tokens(backup_target=str(backup))
+        prewipe_token_path.write_text(json.dumps(tm.to_dict(), indent=2), encoding="utf-8")
+        print(f"  ✅ Keychain: {'present (' + str(tm.keychain.size_bytes) + ' bytes)' if tm.keychain.present else 'MISSING'}; "
+              f"{len(tm.accounts)} readable 2FA account(s). Saved for the after-restore check.")
+    except Exception as e:  # noqa: BLE001
+        print(f"  (inventory skipped: {e})")
 
-    # 4. Token Extraction & Credential Safeguard (manifest sealed in the private state dir).
-    print("\n[4/4] TOKEN EXTRACTION & CREDENTIAL SAFEGUARD")
-    from token_extractor import extract_all_tokens
-    token_manifest = extract_all_tokens(backup_target=backup.backup_path)
+    # 4. Can this computer put the backup back? If not, the person must NOT erase.
+    print("\n[4/5] CAN THIS COMPUTER RESTORE?")
+    if route_refusal:
+        print(f"  🛑 {route_refusal['message']}")
+        for o in route_refusal["options"]:
+            print(f"     - {o['label']}")
+        return 2
+    route = gates.restore_route()
+    print(f"  ✅ Restore app: {route['kind']}" + (f" {route['version']}" if route.get("version") else ""))
 
-    prewipe_token_path = state_path(f"{backup.udid}-tokens-prewipe.json")
-    prewipe_token_path.write_text(json.dumps(token_manifest.to_dict(), indent=2), encoding="utf-8")
-
-    print(f"  ✅ Cryptographic Token Manifest Sealed:")
-    print(f"     Artifact:       {prewipe_token_path}")
-    print(f"     Keybag Posture: {token_manifest.keybag.status} ({token_manifest.keybag.class_count} classes, {token_manifest.keybag.iteration_count:,} iter)")
-    print(f"     Keychain Store: {'INTACT (' + str(token_manifest.keychain.size_bytes) + ' bytes)' if token_manifest.keychain.present else 'MISSING'}")
-    print(f"     Lockdown Token: {'Escrow Bag Present' if token_manifest.lockdown.has_escrow_bag else 'Pairing Record' if token_manifest.lockdown.present else 'Host USB Pairing Required'}")
-    print(f"     Auth Accounts:  {len(token_manifest.accounts)} verified ({sum(1 for a in token_manifest.accounts if a.has_push)} Duo Push, {sum(1 for a in token_manifest.accounts if not a.has_push)} TOTP)")
-    for acc in token_manifest.accounts:
-        push_str = "[Duo Push]" if acc.has_push else "[TOTP]"
-        print(f"       • {push_str} {acc.app_name}: {acc.account_name} ({acc.issuer or acc.host or 'Standard'})")
-
-    print("\n" + "=" * 70)
-    print("🎉 STAGING COMPLETE: ALL ASSETS & SAFETY SNAPSHOTS SECURED!")
-    print("=================================================================")
-    print("Your one-touch action to purge system cache bloat:")
-    print("  1. On your iPhone, open: Settings -> General -> Transfer or Reset iPhone")
-    print("  2. Tap 'Erase All Content and Settings' -> Tap 'Continue'")
-    print("  3. 💡 HINT: If prompted 'Uploading Data to iCloud' / 'Finish Uploading Then Erase',")
-    print("     tap 'Skip Backup' or 'Erase Now' (your full encrypted backup is already secured on this PC).")
-    print("     (The phone's screen may be slow or stop responding for a minute or two while it erases: that's normal.")
-    print("      Wait, don't tap repeatedly, don't unplug.)")
-    print("  4. ⚠️ CRITICAL FOR eSIMs: If prompted about cellular plans, choose 'Keep eSIMs and Erase Data'.")
-    print("  5. Once erased and back at the 'Hello' screen, plug back into PC:")
-    print(f"     - Open iTunes -> Click 'Restore Backup...' -> Select {backup.folder_name}")
-    print("     - Enter your backup password to restore Keychain, Wi-Fi, and 2FA accounts.")
-    print(f"  6. After restore, take a FRESH backup, then verify token survival:")
-    print(f"     python iphone_manager.py tokens verify --prewipe {prewipe_token_path}")
+    print("\n[5/5] READY TO ERASE")
+    print("=" * 70)
+    print("Everything is saved. The one step only you can do, on the phone:")
+    print(f"  1. {gates.ERASE_STEPS}")
+    print(f"  2. {gates.ERASE_WARNING}")
+    print("  3. When the phone shows 'Hello', leave it plugged in and tell me. I take it from there "
+          f"({words['python']} restorer.py ui-restore drives {words['app']}; the backup password box is the only "
+          "thing you may need to type).")
+    print(f"  Afterwards: {words['python']} iphone_manager.py tokens verify --prewipe {prewipe_token_path}")
     print("=" * 70)
     return 0
 
@@ -733,11 +672,12 @@ def main() -> int:
     # itunes (iTunes environment enforcer)
     p_itunes = subparsers.add_parser("itunes", help="Inspect and enforce iTunes Windows installation & backup paths.")
     p_itunes.add_argument("--install", action="store_true", help="Download and install official iTunes from Apple website.")
-    p_itunes.add_argument("--drive", action="store_true", help="Automate focusing iTunes and triggering backup via Windows-MCP.")
-    p_itunes.add_argument("--actuate", action="store_true", help="Actuate backup directly via iTunes UI.")
-    p_itunes.add_argument("--restore", action="store_true", help="Actuate restore directly via iTunes UI.")
-    p_itunes.add_argument("--detect-wipe", action="store_true", help="Deterministically detect if connected device is post-wipe.")
-    p_itunes.add_argument("--monitor", action="store_true", help="Monitor live backup file-write progress for connected device.")
+    p_itunes.add_argument("--drive", action="store_true", help="Take a backup with the backup engine (same as backup_runner.py).")
+    p_itunes.add_argument("--actuate", action="store_true", help=argparse.SUPPRESS)  # old name for --drive
+    p_itunes.add_argument("--restore", action="store_true", help="Removed: points at restorer.py ui-restore.")
+    p_itunes.add_argument("--detect-wipe", action="store_true", help="Is the phone erased and at 'Hello'?")
+    p_itunes.add_argument("--monitor", action="store_true", help="Follow the running backup (backup_runner.py --watch).")
+    p_itunes.add_argument("--udid", help="Target device UDID.")
     p_itunes.add_argument("--yes", "-y", action="store_true", help="Non-interactive mode.")
     p_itunes.set_defaults(func=cmd_itunes)
 
@@ -760,7 +700,9 @@ def main() -> int:
 
     # revive / auto-revive (One-touch automatic revival pipeline)
     p_revive = subparsers.add_parser("revive", aliases=["auto-revive"], help="One-touch automagic revival pipeline (inspect, gate, snapshot, stage restore).")
-    p_revive.add_argument("--auto-drive", action="store_true", help="Automatically drive iTunes backup via Windows-MCP and monitor progress.")
+    p_revive.add_argument("--use-existing", action="store_true",
+                          help="Don't take a new backup: the current one must pass the full pre-erase gate (<24 h old).")
+    p_revive.add_argument("--auto-drive", action="store_true", help=argparse.SUPPRESS)  # old flag: a backup is now always taken
     p_revive.set_defaults(func=cmd_revive)
 
     # restorer (Reset return detection & restoration automation)

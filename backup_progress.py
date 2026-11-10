@@ -36,6 +36,7 @@ PHASE_LINES = {
     "streaming": "Passcode accepted. Backup started and copying data from the phone.",
     "stream_done": "All data copied from the phone. Finishing up...",
     "verifying": "Copy finished. Verifying the backup (encryption, password, integrity)...",
+    "cloning": "Backup verified. Making the safety copy (on Windows a full copy: a few minutes)...",
     "completed": "Backup complete and verified.",
     "failed": "Backup FAILED.",
 }
@@ -205,7 +206,7 @@ def describe(status: Optional[Dict[str, Any]], now: Optional[float] = None) -> D
     out.pop("udid", None)  # nothing downstream needs it; keeps agent transcripts clean
     out["running"] = bool(not terminal and alive is not False)
     out["stalled"] = bool(not terminal and alive and age is not None and age > STALL_AFTER_SEC
-                          and phase != "waiting_passcode")
+                          and phase not in ("waiting_passcode", "cloning"))  # a full copy writes no status
     out["engine_died"] = bool(not terminal and alive is False)
 
     if out["engine_died"]:

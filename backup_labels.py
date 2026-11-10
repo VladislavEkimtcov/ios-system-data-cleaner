@@ -28,7 +28,6 @@ import argparse
 import plistlib
 import re
 import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -160,10 +159,8 @@ def plan(udid: str) -> List[Dict[str, Any]]:
 
 
 def _busy() -> bool:
-    try:
-        return subprocess.run(["pgrep", "-f", "AppleMobileBackup|idevicebackup2"], capture_output=True, timeout=5).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+    from common import process_running
+    return process_running("AppleMobileBackup", "idevicebackup2")
 
 
 def apply(udid: str, revert: bool = False, dry_run: bool = True) -> List[Dict[str, Any]]:

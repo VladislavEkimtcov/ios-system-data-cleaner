@@ -1,6 +1,6 @@
 """
 Coverage for TODO.md backlog items that can be checked without a device or a GUI:
-W2 (no duplicate backup keystrokes), W6 (Windows backup-root selection), W8 (json import),
+W6 (Windows backup-root selection), W8 (json import),
 A10 (single backup-root implementation).
 """
 
@@ -20,84 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("IOS_CLEANER_STATE_DIR", tempfile.mkdtemp(prefix="ioscl_test_state_"))
 
 import common  # noqa: E402
-import itunes_automation  # noqa: E402
 import itunes_env  # noqa: E402
-
-
-class _FakeDesktop:
-    def __init__(self, fail=False):
-        self.fail = fail
-        self.keys = []
-
-    def shortcut(self, key):
-        if self.fail:
-            raise RuntimeError("no desktop")
-        self.keys.append(key)
-
-
-def _driver(desktop):
-    d = itunes_automation.ITunesAutomation.__new__(itunes_automation.ITunesAutomation)
-    d.desktop = desktop
-    d.launch_or_focus_itunes = mock.Mock(return_value=True)
-    return d
-
-
-@mock.patch.object(itunes_automation.time, "sleep", lambda *_: None)
-class TestBackupKeystrokes(unittest.TestCase):
-    def test_sendkeys_fallback_skipped_when_mcp_succeeded(self):
-        drv = _driver(_FakeDesktop())
-        with mock.patch.object(itunes_automation.subprocess, "run") as run:
-            self.assertTrue(drv.send_backup_shortcut())
-        run.assert_not_called()
-        self.assertEqual(drv.desktop.keys, ["alt+f", "d", "b"])
-
-    def test_sendkeys_fallback_used_when_mcp_fails(self):
-        drv = _driver(_FakeDesktop(fail=True))
-        with mock.patch.object(itunes_automation.subprocess, "run") as run:
-            self.assertTrue(drv.send_backup_shortcut())
-        run.assert_called_once()
-
-    def test_sendkeys_fallback_used_without_mcp(self):
-        drv = _driver(None)
-        with mock.patch.object(itunes_automation.subprocess, "run") as run:
-            self.assertTrue(drv.send_backup_shortcut())
-        run.assert_called_once()
-
-    def test_actuate_focuses_itunes_once(self):
-        drv = _driver(_FakeDesktop())
-        drv.actuate_backup_ui()
-        self.assertEqual(drv.launch_or_focus_itunes.call_count, 1)
-
-    def test_no_resend_while_dialog_open(self):
-        drv = _driver(_FakeDesktop())
-        drv.actuate_backup_ui = mock.Mock(return_value=True)
-        drv.detect_and_handle_dialogs = mock.Mock(return_value="set_password_dialog")
-        clock = iter(range(0, 10_000, 100))  # each time.time() call jumps 100 s
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.dict(os.environ, {"IPHONE_BACKUP_DIR": tmp}), \
-                mock.patch.object(itunes_automation.time, "time", lambda: next(clock)), \
-                mock.patch.object(itunes_automation, "find_tool", return_value=None):
-            res = drv.trigger_backup("UDID-X", settling_window_sec=1)
-        self.assertEqual(drv.actuate_backup_ui.call_count, 1)
-        self.assertEqual(res["engine"], "itunes_ui")
-
-    def test_resend_once_when_no_dialog(self):
-        drv = _driver(_FakeDesktop())
-        drv.actuate_backup_ui = mock.Mock(return_value=True)
-        drv.detect_and_handle_dialogs = mock.Mock(return_value=None)
-        clock = iter(range(0, 10_000, 100))
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.dict(os.environ, {"IPHONE_BACKUP_DIR": tmp}), \
-                mock.patch.object(itunes_automation.time, "time", lambda: next(clock)), \
-                mock.patch.object(itunes_automation, "find_tool", return_value=None):
-            drv.trigger_backup("UDID-X", settling_window_sec=1)
-        self.assertEqual(drv.actuate_backup_ui.call_count, 2)
-
-
-class TestItunesAutomationImports(unittest.TestCase):
-    def test_json_available_at_module_level(self):
-        # main() prints json.dumps(...); it must work when main() is called via import.
-        self.assertTrue(hasattr(itunes_automation, "json"))
 
 
 class TestSingleBackupRoot(unittest.TestCase):
@@ -110,8 +33,6 @@ class TestSingleBackupRoot(unittest.TestCase):
             os.environ.pop("IPHONE_BACKUP_DIR", None)
             self.assertEqual(itunes_env.get_itunes_backup_root(), Path("/tmp/ms-override").resolve())
 
-    def test_itunes_automation_reads_root_live(self):
-        self.assertFalse(hasattr(itunes_automation, "BACKUP_ROOT"))
 
 
 class TestSelectBackupRoot(unittest.TestCase):
@@ -197,9 +118,17 @@ class TestKeychainEnumeration(unittest.TestCase):
         looked_up = [c[c.index("-a") + 1] for c in calls if "-a" in c]
         self.assertEqual(looked_up, ["AAA", "BBB", "CCC"])  # deduped, archive suffix stripped
 
-    def test_non_mac_returns_empty_without_calling_security(self):
+    def test_windows_lists_credential_manager_without_calling_security(self):
         import password_tracker
         with mock.patch.object(password_tracker.sys, "platform", "win32"), \
+                mock.patch.object(password_tracker, "wincred_targets", return_value=["iOS Backup:BBB"]), \
+                mock.patch.object(password_tracker.subprocess, "run") as run:
+            self.assertEqual(password_tracker.list_keychain_backup_accounts(["AAA"]), ["BBB"])
+        run.assert_not_called()
+
+    def test_linux_returns_empty_without_calling_security(self):
+        import password_tracker
+        with mock.patch.object(password_tracker.sys, "platform", "linux"), \
                 mock.patch.object(password_tracker.subprocess, "run") as run:
             self.assertEqual(password_tracker.list_keychain_backup_accounts(["AAA"]), [])
         run.assert_not_called()
@@ -298,6 +227,11 @@ class TestReviveBat(unittest.TestCase):
         self.assertNotIn("where python", code)
         self.assertIn("py -3 -c", self.text)
         self.assertIn("chcp 65001", self.text)
+
+    def test_probe_only_mode_and_no_old_autopilot_flag(self):
+        self.assertIn("REVIVE_PROBE_ONLY", self.text)
+        self.assertIn("PYTHON_OK:", self.text)
+        self.assertNotIn("--auto-drive", self.text)
 
 
 class TestDiagnoseConnection(unittest.TestCase):

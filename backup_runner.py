@@ -19,6 +19,7 @@ Fulfills the 'Smart Friend on the Couch' paradigm:
 from __future__ import annotations
 
 import argparse
+import codecs
 import getpass
 import json
 import os
@@ -32,15 +33,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import common as _common
 from common import (
+    CONNECTION_MESSAGES,
     GB,
     _free_name,
     archive_stamp,
     rotate_backup_aside,
     CloneError,
     backup_root,
+    find_tool,
     host_mount,
     make_prewipe_clone,
+    space_needed_gb,
     state_path,
 )
 from backup_progress import ProgressEstimator, describe, progress_line, read_status, watch, write_status
@@ -57,22 +62,14 @@ PROGRESS_RE = re.compile(r"\[\s*={0,}\s*\]\s*(\d+)%\s*(?:\(([^)]+)\))?")
 # "(12.3 MB/45.6 MB)" suffix are per-batch bars and reach 100% many times per backup.
 OVERALL_RE = re.compile(r"\]\s*(\d+(?:\.\d+)?)%\s*Finished")
 HEARTBEAT_SEC = 30.0
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console window flashing up on Windows
 BACKUP_SUCCESS_RE = re.compile(r"Backup Successful\.", re.IGNORECASE)
 ERROR_RE = re.compile(r"ErrorCode \d+:|ERROR:", re.IGNORECASE)
 
 
 def play_sound(sound_name: str) -> None:
-    """Plays a native macOS system sound (/System/Library/Sounds/<name>.aiff) asynchronously."""
-    sound_file = Path(f"/System/Library/Sounds/{sound_name}.aiff")
-    if sound_file.exists():
-        try:
-            subprocess.Popen(
-                ["afplay", str(sound_file)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-        except Exception:
-            pass
+    """Thin wrapper (kept for imports and tests): see common.play_sound (macOS and Windows)."""
+    _common.play_sound(sound_name)
 
 
 def send_notification(
@@ -81,22 +78,8 @@ def send_notification(
     subtitle: str = "Backup Engine",
     sound: Optional[str] = None
 ) -> None:
-    """Dispatches a macOS notification banner via AppleScript."""
-    clean_msg = message.replace('"', '\\"')
-    clean_title = title.replace('"', '\\"')
-    clean_sub = subtitle.replace('"', '\\"')
-    script = f'display notification "{clean_msg}" with title "{clean_title}" subtitle "{clean_sub}"'
-    if sound:
-        script += f' sound name "{sound}"'
-    try:
-        subprocess.run(
-            ["osascript", "-e", script],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=2.0
-        )
-    except Exception:
-        pass
+    """Thin wrapper (kept for imports and tests): see common.send_notification (macOS and Windows)."""
+    _common.send_notification(message, title=title, subtitle=subtitle, sound=sound)
 
 
 class BackupRunner:
@@ -121,6 +104,8 @@ class BackupRunner:
         self.show_notifications = show_notifications
         self.status_file = status_file or STATUS_FILE
         self.verbose = verbose
+        found = find_tool("idevicebackup2")
+        self.tool: Optional[str] = str(found) if found else None
 
         self.device_info: Dict[str, str] = {}
         self.device_name = "iPhone"
@@ -226,14 +211,14 @@ class BackupRunner:
                 continue
             # Offer to save it so Finder can auto-fill during restore.
             try:
-                ans = input("  Save this password to the macOS Keychain for restore? [Y/n]: ").strip().lower()
+                ans = input(f"  Save this password to the {_common.host_words()['keychain']} for the restore? [Y/n]: ").strip().lower()
             except (KeyboardInterrupt, EOFError):
                 ans = "n"
             if ans in ("", "y", "yes") and self.udid:
                 try:
                     import password_tracker
-                    password_tracker.store_in_keychain(self.udid, p1)
-                    self.log("  ✅ Saved to Keychain.")
+                    ok, why = password_tracker.store_in_keychain(self.udid, p1)
+                    self.log(f"  ✅ {why}" if ok else f"  ⚠️ Not saved: {why}")
                 except Exception:
                     pass
             return p1
@@ -245,6 +230,8 @@ class BackupRunner:
         self.log("       AUTONOMOUS IPHONE BACKUP ENGINE")
         self.log("=======================================================")
         self.update_status("preflight", message="Running pre-flight checks...")
+        if not self.tool:
+            return False, CONNECTION_MESSAGES["tools_missing"]
 
         # 1. Identify connected device
         try:
@@ -283,8 +270,13 @@ class BackupRunner:
             stat = shutil.disk_usage(str(host_mount()))
             free_gb = stat.free / GB
             self.log(f"  Host Free Space:     {free_gb:.1f} GB")
-            if free_gb < 20.0:
-                return False, f"Host has only {free_gb:.1f} GB free. At least 20 GB required."
+            # The previous backup is only renamed aside (no space), but off APFS the safety copy is a full copy.
+            previous = self._backup_bytes() if self.udid else 0
+            need_gb, why = space_needed_gb(previous or self.estimated_total_bytes)
+            if free_gb < need_gb:
+                return False, (f"This computer has only {free_gb:.1f} GB free and this backup needs about {need_gb:.0f} GB "
+                               f"({why}). Free some space first: `restorer.py backups` lists old backups and proposes "
+                               "which one can go.")
         except Exception as e:
             self.log(f"  ⚠️ Warning inspecting disk usage: {e}")
 
@@ -313,13 +305,14 @@ class BackupRunner:
             # any local process could read it with `ps`.
             env = os.environ.copy()
             env["BACKUP_PASSWORD"] = self.password
-            cmd = ["idevicebackup2", "encryption", "on"]
+            cmd = [self.tool, "encryption", "on"]
             if self.udid:
                 cmd.extend(["-u", self.udid])
             cmd.append(str(self.backup_dir))
-            res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            res = subprocess.run(cmd, capture_output=True, env=env, creationflags=_NO_WINDOW)
+            res_out = (res.stderr or res.stdout or b"").decode("utf-8", errors="replace")
             if res.returncode != 0:
-                return False, f"Failed to enable backup encryption: {res.stderr or res.stdout}"
+                return False, f"Failed to enable backup encryption: {res_out}"
             self.log("  Backup Encryption:   ✅ Enabled successfully.")
         else:
             self.log("  Backup Encryption:   ✅ Enabled on device.")
@@ -355,7 +348,7 @@ class BackupRunner:
             if self._archived:
                 self.log(f"  📦 Previous backup kept as: {self._archived.name} (never overwritten)")
 
-        cmd = ["idevicebackup2", "backup", "--full"]
+        cmd = [self.tool or "idevicebackup2", "backup", "--full"]
         if self.udid:
             cmd.extend(["-u", self.udid])
         cmd.append(str(self.backup_dir))
@@ -416,6 +409,24 @@ class BackupRunner:
         except OSError as e:
             self.log(f"  ⚠️ Couldn't put the previous backup back ({e}). It is safe as: {self._archived.name}")
 
+    def _feed(self, buffer: str, data: bytes, final: bool = False) -> str:
+        """Appends raw output bytes, hands every complete line (ended by CR or LF: the progress bar redraws
+        with CR) to _process_line, and returns what is left. final=True flushes the remainder."""
+        # Incremental: a Cyrillic letter split across two reads must not turn into two '?'.
+        if not hasattr(self, "_decoder"):
+            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        buffer += self._decoder.decode(data, final=final)
+        while "\r" in buffer or "\n" in buffer:
+            split_idx = min(i for i in (buffer.find("\r"), buffer.find("\n")) if i != -1)
+            line = buffer[:split_idx].strip()
+            buffer = buffer[split_idx + 1:]
+            if line:
+                self._process_line(line)
+        if final and buffer.strip():
+            self._process_line(buffer.strip())
+            buffer = ""
+        return buffer
+
     def _run_pty(self, cmd, env, pty, select) -> int:
         master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(
@@ -433,36 +444,36 @@ class BackupRunner:
                         break
                     if not data:
                         break
-                    buffer += data.decode("utf-8", errors="replace")
-                    while "\r" in buffer or "\n" in buffer:
-                        split_idx = min(i for i in (buffer.find("\r"), buffer.find("\n")) if i != -1)
-                        line = buffer[:split_idx].strip()
-                        buffer = buffer[split_idx + 1:]
-                        if line:
-                            self._process_line(line)
+                    buffer = self._feed(buffer, data)
                 if proc.poll() is not None:
                     try:
-                        remainder = os.read(master_fd, 8192).decode("utf-8", errors="replace")
-                        for line in remainder.splitlines():
-                            if line.strip():
-                                self._process_line(line.strip())
+                        buffer = self._feed(buffer, os.read(master_fd, 8192))
                     except OSError:
                         pass
                     break
         finally:
+            self._feed(buffer, b"", final=True)
             os.close(master_fd)
             proc.wait()
         return proc.returncode
 
     def _run_pipe(self, cmd, env) -> int:
+        """Windows (no PTY): read raw bytes as they arrive (never the ANSI code page: the phone's name may be
+        Cyrillic) and split on CR as well as LF, like the PTY reader."""
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, bufsize=1
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, env=env,
+            bufsize=0, creationflags=_NO_WINDOW,
         )
         assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.strip()
-            if line:
-                self._process_line(line)
+        buffer = ""
+        read = getattr(proc.stdout, "read1", proc.stdout.read)
+        with proc.stdout:
+            while True:
+                data = read(4096)
+                if not data:
+                    break
+                buffer = self._feed(buffer, data)
+        self._feed(buffer, b"", final=True)
         proc.wait()
         return proc.returncode
 
@@ -570,8 +581,16 @@ class BackupRunner:
         #    fallback that must survive any later sync, so it is created once and kept.
         import shutil
         prewipe_clone: Optional[Path] = None
+        if sys.platform != "darwin":
+            # Off APFS this is a full copy and takes minutes: say so, so check-ins don't look stuck.
+            self.update_status("cloning", message="Making the safety copy of the backup (a full copy on this disk; "
+                                                  "a few minutes)...")
+            self.log("  ⏳ Making the safety copy (a full copy on this disk, a few minutes)...")
         try:
+            t0 = time.time()
             prewipe_clone = make_prewipe_clone(target_backup, verbose=False)
+            if sys.platform != "darwin":
+                self.log(f"     copy took {time.time() - t0:.0f} s")
             self.log(f"  ✅ Immutable Safety Clone:    {prewipe_clone.name}")
             from backup_labels import ensure_labels
             ensure_labels(self.udid, say=lambda m: self.log(f"  🏷️  {m}"))   # distinct names in Finder's restore pop-up
@@ -616,6 +635,16 @@ class BackupRunner:
         self.log("=======================================================")
         self.log("🎉 BACKUP CYCLE COMPLETED SUCCESSFULLY!")
         self.log("=======================================================\n")
+        try:
+            import restore_gates
+            no_route = restore_gates.check_restore_route(before_erase=True)
+        except Exception:  # noqa: BLE001
+            no_route = None
+        if no_route:  # e.g. a Windows PC without iTunes: the backup is fine, the erase is not
+            self.log(f"🛑 {no_route['message']}")
+            for o in no_route["options"]:
+                self.log(f"   - {o['label']}")
+            self.update_status(None, restore_app_missing=True, message=no_route["message"])
         return True, "Backup cycle completed and verified (the previous backup was kept)."
 
     def execute(self) -> bool:

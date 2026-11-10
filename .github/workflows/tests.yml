@@ -43,3 +43,10 @@ jobs:
 
       - name: Run test suite
         run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: revive.bat finds Python (Windows only)
+        if: runner.os == 'Windows'
+        shell: cmd
+        env:
+          REVIVE_PROBE_ONLY: "1"
+        run: call revive.bat

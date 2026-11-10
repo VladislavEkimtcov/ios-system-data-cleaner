@@ -194,7 +194,7 @@ def auto_install_packages_to_simulator(
 
         # Attempt simctl install
         cmd = ["xcrun", "simctl", "install", simulator_udid, str(cand)]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         if res.returncode == 0:
             installed_results.append({
                 "package": cand.name,

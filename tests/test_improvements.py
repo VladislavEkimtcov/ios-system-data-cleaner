@@ -196,38 +196,63 @@ class TestProofGateFailsClosed(unittest.TestCase):
         self.assertIn("No password-proving tool", msg)
 
 
-class TestITunesDriveWorkflowNoCrash(unittest.TestCase):
-    def test_drive_workflow_handles_bool_verdict(self):
-        # Regression: drive_full_backup_workflow used to read .verdict/.reasons off the bool
-        # returned by inspect_backup and call it without max_age_hours, crashing every run.
-        import itunes_automation
-        from unittest.mock import patch
-        drv = itunes_automation.ITunesAutomation()
-        fake_prog = itunes_automation.BackupProgress(
-            udid="u", backup_path="/tmp/nope", exists=True, size_bytes=1, size_gb=0.0,
-            file_count=1, state="finished", is_encrypted=True, last_updated=0.0, elapsed_seconds=0.0)
-        with patch.object(drv, "trigger_backup", return_value={"process": None}), \
-             patch.object(drv, "monitor_backup", return_value=fake_prog), \
-             patch.object(itunes_automation, "inspect_backup", return_value=True):
-            res = drv.drive_full_backup_workflow("u")
-        self.assertEqual(res["status"], "success")
-        self.assertEqual(res["verdict"], "PASS")
+class TestReviveSequence(unittest.TestCase):
+    """revive = backup engine -> (verify, clone, list inside it) -> restore-route gate -> erase wording."""
 
-
-class TestReviveStopsOnFail(unittest.TestCase):
-    def test_revive_returns_nonzero_when_gate_fails(self):
+    def _run(self, engine_rc=0, route=None, ready=True, udids=("u",), use_existing=False):
         import iphone_manager
+        import restore_gates
         from unittest.mock import patch, MagicMock
-        args = MagicMock(auto_drive=False)
-        fake_backup = MagicMock(backup_path="/tmp/b", udid="u", is_encrypted=True, size_gb=1.0, folder_name="u")
-        with patch("iphone_manager.find_backup_for_target", return_value=fake_backup), \
-             patch("storage_monitor.run_ideviceinfo", return_value={"UniqueDeviceID": "u", "DeviceName": "d"}), \
-             patch("win_tools.detect_apple_pnp_devices", return_value=[]), \
-             patch("itunes_env.check_itunes_installation"), \
-             patch("backup_verifier.inspect_backup", return_value=False), \
-             patch("shutil.disk_usage", return_value=type("U", (), {"free": 999 * 10**9, "total": 10**12, "used": 0})()):
+        args = MagicMock(use_existing=use_existing)
+        diag = {"ready": ready, "state": "ready" if ready else "no_usb_device", "message": "m", "udids": list(udids)}
+        route = route if route is not None else {"kind": "finder", "exe": None, "version": None}
+        with patch("common.diagnose_connection", return_value=diag), \
+                patch.object(iphone_manager, "_run_backup_engine", return_value=engine_rc) as engine, \
+                patch.object(restore_gates, "restore_route", return_value=route), \
+                patch("token_extractor.extract_all_tokens", side_effect=RuntimeError("skip")):
             rc = iphone_manager.cmd_revive(args)
+        return rc, engine
+
+    def test_failed_backup_blocks_the_erase(self):
+        rc, engine = self._run(engine_rc=1)
         self.assertEqual(rc, 1)
+        engine.assert_called_once_with("u")
+
+    def test_good_backup_and_restore_app_means_ready(self):
+        self.assertEqual(self._run()[0], 0)
+
+    def test_no_restore_app_backs_up_but_says_do_not_erase(self):
+        rc, engine = self._run(route={"kind": None, "exe": None, "version": None})
+        self.assertEqual(rc, 2)
+        engine.assert_called_once()
+
+    def test_no_phone_or_two_phones_stop_before_the_backup(self):
+        rc, engine = self._run(ready=False)
+        self.assertEqual(rc, 1)
+        engine.assert_not_called()
+        rc, engine = self._run(udids=("a", "b"))
+        self.assertEqual(rc, 1)
+        engine.assert_not_called()
+
+    def test_existing_backup_must_pass_the_gate(self):
+        import iphone_manager
+        from unittest.mock import patch
+        with patch.object(iphone_manager, "_existing_backup_gate", return_value=None) as gate:
+            rc, engine = self._run(use_existing=True)
+        self.assertEqual(rc, 1)
+        gate.assert_called_once_with("u")
+        engine.assert_not_called()
+
+    def test_closing_message_never_says_restore_backup_button(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(self._run()[0], 0)
+        out = buf.getvalue()
+        self.assertNotIn("Restore Backup...", out)
+        self.assertIn("Skip Backup", out)
+        self.assertIn("Hello", out)
 
 
 def _free_port() -> int:

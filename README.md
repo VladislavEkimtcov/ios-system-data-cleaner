@@ -9,7 +9,7 @@
 [![CI Tests](https://github.com/VladislavEkimtcov/ios-system-data-cleaner/actions/workflows/tests.yml/badge.svg)](https://github.com/VladislavEkimtcov/ios-system-data-cleaner/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Standard%20Library-brightgreen)](https://docs.python.org/3/)
-[![macOS](https://img.shields.io/badge/Platform-macOS-lightgrey.svg)](https://apple.com/macos)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey.svg)](windows_revival_guide.md)
 
 ---
 
@@ -71,7 +71,7 @@ The only reliable, Apple-supported method to reclaim this space is an **Encrypte
 ## 🚀 Quickstart (3 Steps)
 
 ### Requirements
-- A Mac running macOS Sonoma (14.0+) or Sequoia (15.0+). A Windows 10+ machine will also do.
+- A Mac running macOS Sonoma (14.0+) or Sequoia (15.0+), or a Windows 10+ PC. On Windows, backups need only Apple Mobile Device Support; the restore needs iTunes (see `windows_revival_guide.md`).
 - Python 3.10+ (standard macOS Python; no third-party libraries required).
 - Lightning or USB-C cable.
 

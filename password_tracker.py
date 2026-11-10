@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common import ARCHIVE_SUFFIX, backup_root, connected_udids, find_tool, keybag_fingerprint, state_path
+from common import ARCHIVE_SUFFIX, backup_root, connected_udids, find_tool, host_words, keybag_fingerprint, state_path
 
 HISTORY_JSON = state_path("tried_passwords.json")
 SALT_FILE = state_path(".pw_salt")
@@ -291,7 +291,114 @@ def generate_variants(base: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# macOS Keychain integration
+# Windows Credential Manager (the Windows twin of the Keychain item below)
+# ---------------------------------------------------------------------------
+# A generic credential "iOS Backup:<UDID>" per phone, persisted for this Windows user (LOCAL_MACHINE
+# persistence = this user on this PC, not roaming). Through advapi32 with ctypes: `cmdkey` cannot read a
+# secret back and `keyring` is a third-party package. Windows never shows a generic secret in its UI, so
+# there is no "look it up" step on Windows (see open_keychain_ui).
+
+WINCRED_PREFIX = "iOS Backup:"
+_CRED_TYPE_GENERIC = 1
+_CRED_PERSIST_LOCAL_MACHINE = 2
+
+
+def _wincred_api():
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [("dwLowDateTime", wintypes.DWORD), ("dwHighDateTime", wintypes.DWORD)]
+
+    class CREDENTIALW(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR), ("LastWritten", FILETIME), ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)), ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+            ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR),
+        ]
+
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    PCRED = ctypes.POINTER(CREDENTIALW)
+    adv.CredWriteW.argtypes = [PCRED, wintypes.DWORD]
+    adv.CredWriteW.restype = wintypes.BOOL
+    adv.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(PCRED)]
+    adv.CredReadW.restype = wintypes.BOOL
+    adv.CredEnumerateW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                                   ctypes.POINTER(ctypes.POINTER(PCRED))]
+    adv.CredEnumerateW.restype = wintypes.BOOL
+    adv.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    adv.CredDeleteW.restype = wintypes.BOOL
+    adv.CredFree.argtypes = [ctypes.c_void_p]
+    adv.CredFree.restype = None
+    return ctypes, CREDENTIALW, PCRED, adv
+
+
+def wincred_write(target: str, user: str, secret: str) -> Tuple[bool, str]:
+    try:
+        ctypes, CREDENTIALW, _PCRED, adv = _wincred_api()
+        blob = secret.encode("utf-16-le")
+        buf = (ctypes.c_ubyte * len(blob)).from_buffer_copy(blob) if blob else (ctypes.c_ubyte * 1)()
+        cred = CREDENTIALW()
+        cred.Type = _CRED_TYPE_GENERIC
+        cred.TargetName = target
+        cred.UserName = user
+        cred.Comment = "iPhone backup password, proven against the backup by ios-system-data-cleaner"
+        cred.CredentialBlobSize = len(blob)
+        cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte))
+        cred.Persist = _CRED_PERSIST_LOCAL_MACHINE
+        if not adv.CredWriteW(ctypes.byref(cred), 0):
+            return False, f"Credential Manager refused the write (error {ctypes.get_last_error()})."
+        return True, "ok"
+    except Exception as e:  # noqa: BLE001
+        return False, f"Credential Manager not available: {e}"
+
+
+def wincred_read(target: str) -> Optional[str]:
+    try:
+        ctypes, _CREDENTIALW, PCRED, adv = _wincred_api()
+        p = PCRED()
+        if not adv.CredReadW(target, _CRED_TYPE_GENERIC, 0, ctypes.byref(p)):
+            return None
+        try:
+            c = p.contents
+            raw = ctypes.string_at(c.CredentialBlob, c.CredentialBlobSize) if c.CredentialBlobSize else b""
+            return raw.decode("utf-16-le") or None
+        finally:
+            adv.CredFree(p)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def wincred_targets(prefix: str = WINCRED_PREFIX) -> List[str]:
+    """Target names (never secrets) of our generic credentials."""
+    try:
+        ctypes, _CREDENTIALW, PCRED, adv = _wincred_api()
+        from ctypes import wintypes
+        count = wintypes.DWORD()
+        arr = ctypes.POINTER(PCRED)()
+        if not adv.CredEnumerateW(prefix + "*", 0, ctypes.byref(count), ctypes.byref(arr)):
+            return []
+        try:
+            return [arr[i].contents.TargetName for i in range(count.value)
+                    if arr[i].contents.Type == _CRED_TYPE_GENERIC]
+        finally:
+            adv.CredFree(arr)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def wincred_delete(target: str) -> bool:
+    try:
+        _ctypes, _CREDENTIALW, _PCRED, adv = _wincred_api()
+        return bool(adv.CredDeleteW(target, _CRED_TYPE_GENERIC, 0))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ---------------------------------------------------------------------------
+# macOS Keychain integration (dispatches to Credential Manager on Windows)
 # ---------------------------------------------------------------------------
 
 _KEYCHAIN_CACHE: Dict[Tuple[Optional[str], str], Optional[str]] = {}
@@ -303,7 +410,14 @@ def store_in_keychain(udid: str, password: str) -> Tuple[bool, str]:
 
     The item is created WITHOUT -A: access is not granted to every application. Finder
     prompts once to use it, which is the intended, safe behavior.
+    Windows: a generic credential "iOS Backup:<UDID>" in Credential Manager (this Windows user only).
     """
+    if sys.platform == "win32":
+        ok, why = wincred_write(WINCRED_PREFIX + udid, udid, password)
+        if ok:
+            _KEYCHAIN_CACHE[(udid, "iOS Backup")] = password
+            return True, "Stored the password in Windows Credential Manager (for this Windows user)."
+        return False, why
     cmd = [
         "security", "add-generic-password",
         "-a", udid,
@@ -330,6 +444,11 @@ _ACCT_LINE = re.compile(r'^\s*"acct"<blob>="(.*)"\s*$', re.MULTILINE)
 def _keychain_item_account(account: Optional[str] = None) -> Optional[str]:
     """Metadata-only lookup of one 'iOS Backup' item (no -w: the secret is never read,
     so no authorization prompt). Returns the item's account name, or None if absent."""
+    if sys.platform == "win32":
+        targets = wincred_targets()
+        if account:
+            return account if (WINCRED_PREFIX + account) in targets else None
+        return targets[0][len(WINCRED_PREFIX):] if targets else None
     cmd = ["security", "find-generic-password", "-s", KEYCHAIN_BACKUP_SERVICE]
     if account:
         cmd.extend(["-a", account])
@@ -370,6 +489,8 @@ def list_keychain_backup_accounts(
     names) plus the first 'iOS Backup' item, each with a metadata-only query. It never runs
     `security dump-keychain`, which reads every login-keychain item and can raise prompts.
     """
+    if sys.platform == "win32":
+        return [t[len(WINCRED_PREFIX):] for t in wincred_targets()]
     if sys.platform != "darwin":
         return []
     wanted = list(candidate_udids or []) + _known_udids(root)
@@ -388,6 +509,11 @@ def get_keychain_password(account: Optional[str] = None, service: str = "iOS Bac
     cache_key = (account, service)
     if cache_key in _KEYCHAIN_CACHE:
         return _KEYCHAIN_CACHE[cache_key]
+    if sys.platform == "win32":
+        acct = account or _keychain_item_account(None)
+        pwd = wincred_read(WINCRED_PREFIX + acct) if acct else None
+        _KEYCHAIN_CACHE[cache_key] = pwd
+        return pwd
 
     cmd = ["security", "find-generic-password", "-s", service]
     if account:
@@ -407,7 +533,10 @@ def get_keychain_password(account: Optional[str] = None, service: str = "iOS Bac
 
 
 def open_keychain_ui(search_query: str = "iOS Backup") -> bool:
-    """Brings macOS Keychain Access forward, filtered to search_query, for manual inspection."""
+    """Brings macOS Keychain Access forward, filtered to search_query, for manual inspection.
+    Windows has no equivalent (Credential Manager never shows a generic secret): returns False."""
+    if sys.platform != "darwin":
+        return False
     script = f'''
     tell application "Keychain Access"
         activate
@@ -476,7 +605,8 @@ def smart_keychain_probe(
             break
 
     if not proven_password:
-        return False, None, "No matching password found in macOS Keychain. The operator must prove the password themselves."
+        return False, None, (f"No matching password found in {host_words()['keychain']}. "
+                             "The operator must prove the password themselves.")
 
     if interactive and sys.stdin.isatty():
         print("\n=======================================================")
@@ -564,8 +694,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="toggle-row">
                 <label><input type="checkbox" id="chk-mask" onchange="toggleMask(this.checked)"> Mask input</label>
                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <button type="button" class="btn-secondary" onclick="checkKeychain()">Smart Keychain Check</button>
-                    <button type="button" class="btn-secondary" onclick="openKeychain()">Open Keychain Access</button>
+                    <button type="button" class="btn-secondary" onclick="checkKeychain()">__CHECK_LABEL__</button>
+                    __OPEN_KEYCHAIN_BUTTON__
                     <button type="button" class="btn-secondary" onclick="tryVariants()">Generate Variations</button>
                 </div>
             </div>
@@ -641,12 +771,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             else showStatus("Tested " + d.count + " variations. No match.", "error");
         }
         async function checkKeychain() {
-            showStatus("Searching macOS Keychain and testing stored credentials...", "info");
+            showStatus("Searching __KEYCHAIN__ and testing stored credentials...", "info");
             try {
                 const res = await fetch("/api/keychain-check", { method:"POST", headers:hdrs() });
                 const d = await res.json(); await fetchHistory();
                 if (d.success) showStatus("🎉 A stored Keychain password unlocks the backup.", "success");
-                else showStatus(d.message || "No working password found in Keychain.", "warn");
+                else showStatus(d.message || "No working password found in __KEYCHAIN__.", "warn");
             } catch (e) { showStatus("Error: " + e.message, "error"); }
         }
         async function openKeychain() {
@@ -662,6 +792,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+
+def render_page(udid: str, token: str, platform: Optional[str] = None) -> str:
+    """The helper page for this computer. Windows has no 'Open Keychain Access': Credential Manager never shows a
+    saved backup password, so that button is left out there."""
+    plat = platform or sys.platform
+    words = host_words(plat)
+    mac = plat == "darwin"
+    button = ('<button type="button" class="btn-secondary" onclick="openKeychain()">Open Keychain Access</button>'
+              if mac else "")
+    return (HTML_TEMPLATE.replace("__UDID__", udid).replace("__TOKEN__", token)
+            .replace("__CHECK_LABEL__", "Smart Keychain Check" if mac else "Check saved passwords")
+            .replace("__OPEN_KEYCHAIN_BUTTON__", button)
+            .replace("__KEYCHAIN__", "macOS Keychain" if mac else words["keychain"]))
 
 
 class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
@@ -699,7 +843,7 @@ class PasswordServerHandler(http.server.BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlparse(self.path).path
         if path in ("/", "/index.html"):
-            html = HTML_TEMPLATE.replace("__UDID__", self.target_udid).replace("__TOKEN__", self.session_token)
+            html = render_page(self.target_udid, self.session_token)
             self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
             return
         if not self._token_ok():
@@ -844,7 +988,7 @@ def launch_web_ui(udid: str, port: int = 8765, exit_on_success: bool = False,
     finally:
         httpd.shutdown()
         httpd.server_close()
-    print("PROOF_OK: password proven and saved to your Keychain." if ok else
+    print(f"PROOF_OK: password proven and saved to your {host_words()['keychain']}." if ok else
           "PROOF_TIMEOUT: no correct password was entered.", flush=True)
     return ok
 

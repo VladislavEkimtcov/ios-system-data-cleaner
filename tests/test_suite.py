@@ -4,9 +4,12 @@ Test Suite for iOS Storage Revival, Backup Verifier, and Token-Saver Compactor.
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
+from unittest import mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -323,14 +326,35 @@ class TestWindowsEnvironment(unittest.TestCase):
         from dep_installer import (
             APPLE_ITUNES_WIN32_URL,
             APPLE_ITUNES_WIN64_URL,
-            LIBIMOBILE_FALLBACK_URL,
+            LIBIMOBILE_SHA256,
+            LIBIMOBILE_TAG,
+            LIBIMOBILE_URL,
             get_apple_itunes_download_url,
         )
         # The stale, pinned secure-appldnld.apple.com installer URL was removed.
-        self.assertTrue(LIBIMOBILE_FALLBACK_URL.endswith(".zip"))
+        self.assertTrue(LIBIMOBILE_URL.endswith(".zip"))
+        self.assertIn(LIBIMOBILE_TAG, LIBIMOBILE_URL)
+        self.assertNotIn("/latest", LIBIMOBILE_URL)
+        self.assertRegex(LIBIMOBILE_SHA256, r"^[0-9a-f]{64}$")
         self.assertEqual(APPLE_ITUNES_WIN64_URL, "https://www.apple.com/itunes/download/win64")
         self.assertEqual(APPLE_ITUNES_WIN32_URL, "https://www.apple.com/itunes/download/win32")
         self.assertIn("download/win", get_apple_itunes_download_url())
+
+    def test_cli_tools_download_with_wrong_hash_is_refused_and_not_extracted(self):
+        import dep_installer as di
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, out, True)
+
+        def fake_download(url, dest, label=""):
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.writestr("bin/ideviceinfo.exe", b"not the real thing")
+
+        with mock.patch.object(di.sys, "platform", "win32"), \
+                mock.patch.object(di, "download_file_with_progress", side_effect=fake_download):
+            res = di.install_cli_tools(target_dir=out, consent=True)
+        self.assertEqual(res["status"], "error")
+        self.assertIn("SHA-256", res["message"])
+        self.assertEqual(list(out.iterdir()), [])
 
     def test_prompt_yes_no_non_tty(self):
         from dep_installer import prompt_yes_no
@@ -340,12 +364,14 @@ class TestWindowsEnvironment(unittest.TestCase):
             self.assertTrue(prompt_yes_no("Test prompt?", default=True))
 
     def test_itunes_automation_module(self):
-        from itunes_automation import ITunesAutomation, BackupProgress
-        auto = ITunesAutomation()
-        self.assertIsNotNone(auto)
-        self.assertTrue(hasattr(auto, "monitor_backup"))
+        import itunes_automation
+        auto = itunes_automation.ITunesAutomation(itunes_exe="C:/nowhere/iTunes.exe")
         self.assertTrue(hasattr(auto, "launch_or_focus_itunes"))
-        self.assertTrue(hasattr(auto, "send_backup_shortcut"))
+        # The keystroke backup and the blind {ENTER} restore are gone for good.
+        for gone in ("send_backup_shortcut", "actuate_backup_ui", "actuate_restore_ui", "trigger_backup",
+                     "monitor_backup", "drive_full_backup_workflow", "detect_device_wipe_state"):
+            self.assertFalse(hasattr(auto, gone), gone)
+        self.assertFalse(hasattr(itunes_automation, "Desktop"))
 
 
 class TestTokenExtractionProtocol(unittest.TestCase):
@@ -459,42 +485,6 @@ class TestTokenExtractionProtocol(unittest.TestCase):
         dirs = get_lockdown_search_dirs()
         self.assertIsInstance(dirs, list)
         self.assertGreater(len(dirs), 0)
-
-    def test_detect_device_wipe_state(self):
-        from unittest.mock import patch
-        from itunes_automation import ITunesAutomation
-
-        driver = ITunesAutomation()
-
-        synth_udid = "00000000000000000000000000000000deadbeef"
-        # 1. Post-wipe mock ("EACS Done" base64, device name reset to default 'iPhone')
-        post_wipe_info = {
-            "UniqueDeviceID": synth_udid,
-            "DeviceName": "iPhone",
-            "PasswordProtected": "false",
-            "ActivationState": "Activated",
-            "obliteration": "RUFDUyBEb25lIEAxNzk0MTUzOTQzLCBDYWxsZXI6IE4vQSwgUmVhc29uOiBEaXNlbWJhcmsgW2dGOiAweDAwMDAwMDAwMDAwMDAwMDBd",
-        }
-        with patch("storage_monitor.run_ideviceinfo", return_value=post_wipe_info), \
-             patch.object(driver, "is_itunes_running", return_value=True):
-            res = driver.detect_device_wipe_state(synth_udid)
-            self.assertTrue(res["is_wiped"])
-            self.assertEqual(res["ui_state"], "welcome_screen")
-            self.assertIn("EACS Done", res["obliteration"])
-            self.assertIn("Lockdown reports PasswordProtected == False", " ".join(res["reasons"]))
-
-        # 2. Pre-wipe mock
-        pre_wipe_info = {
-            "UniqueDeviceID": synth_udid,
-            "DeviceName": "My Phone",
-            "PasswordProtected": "true",
-            "ActivationState": "Activated",
-        }
-        with patch("storage_monitor.run_ideviceinfo", return_value=pre_wipe_info), \
-             patch.object(driver, "is_itunes_running", return_value=True):
-            res_pre = driver.detect_device_wipe_state(synth_udid)
-            self.assertFalse(res_pre["is_wiped"])
-            self.assertEqual(res_pre["ui_state"], "summary_screen")
 
 
 if __name__ == "__main__":

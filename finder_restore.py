@@ -48,7 +48,7 @@ from common import connected_udids, ensure_utf8_console, state_path
 import restore_gates as gates
 
 STATUS_NAME = ".ui_restore_status.json"
-RESUME_CMD = "python3 restorer.py ui-restore --resume --confirm --hello-confirmed"
+RESUME_CMD = f"{gates.WORDS['python']} restorer.py ui-restore --resume --confirm --hello-confirmed"
 RESUME_MAX_AGE_SEC = 4 * 3600
 POLL_SEC = 3.0
 RECLICK_AFTER_SEC = 20.0   # Finder keeps the sheet up while it checks the password: don't press again meanwhile
@@ -361,8 +361,11 @@ def _password_rejected(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def open_in_system_browser(url: str) -> bool:
-    """Opens the helper page (a local 127.0.0.1 URL) in the Mac's default browser."""
+    """Opens the helper page (a local 127.0.0.1 URL) in the default browser (macOS `open`, Windows startfile)."""
     try:
+        if sys.platform == "win32":
+            os.startfile(url)  # type: ignore[attr-defined]
+            return True
         return subprocess.run(["open", url], capture_output=True, timeout=15).returncode == 0
     except Exception:
         return False
@@ -375,7 +378,7 @@ def launch_password_helper(udid: str, wait_sec: float = 20.0) -> Optional[Tuple[
     cmd = [sys.executable, str(Path(__file__).with_name("password_tracker.py")), "--udid", udid,
            "--port", str(HELPER_PORT), "--exit-on-success", "--no-browser"]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
     except OSError:
         return None
     found: List[str] = []
@@ -598,8 +601,9 @@ class Run:
             return
         started = self.launch_helper()
         if not started:
-            self.say("The password still isn't working. I couldn't start the password helper page; you can look in "
-                     "Keychain Access (search 'iOS Backup') or keep trying.")
+            self.say("The password still isn't working. I couldn't start the password helper page; "
+                     + ("you can look in Keychain Access (search 'iOS Backup') or keep trying." if sys.platform == "darwin"
+                        else "keep trying, or stop and come back when you remember it."))
             return
         self.helper_url, self.helper_proc = started
         self.status(password_helper_url=self.helper_url)
@@ -607,10 +611,10 @@ class Run:
         self.notify("The backup password isn't working. The password helper page is open in your browser." if opened
                     else "The backup password isn't working. A password helper page is ready; ask the assistant for the link.")
         self.say("OFFER_PASSWORD_HELPER: The backup password hasn't worked a couple of times. I started a password helper "
-                 "page on this Mac that tries what you remember and common variations, and "
+                 f"page on this {gates.WORDS['computer']} that tries what you remember and common variations, and "
                  + ("opened it in the system browser for the person" if opened
                     else f"could not open the browser, so offer them this link: {self.helper_url}")
-                 + ". The Finder box keeps waiting meanwhile.")
+                 + f". The {gates.WORDS['app']} box keeps waiting meanwhile.")
 
     def _open_browser(self, url: str) -> bool:
         try:
@@ -624,8 +628,13 @@ class Run:
             return
         self.helper_reported = True
         if proc.returncode == 0:
-            self.say("PASSWORD_FOUND: The helper page found the right password and saved it to the Keychain. Tell the person "
-                     "to type it into the Finder box (Keychain Access, search 'iOS Backup', shows it). The restore continues by itself.")
+            if sys.platform == "darwin":
+                self.say("PASSWORD_FOUND: The helper page found the right password and saved it to the Keychain. Tell the "
+                         "person to type it into the Finder box (Keychain Access, search 'iOS Backup', shows it). The "
+                         "restore continues by itself.")
+            else:
+                self.say(f"PASSWORD_FOUND: The password the person just typed in the helper page is the right one. Tell "
+                         f"them to type the same into the {gates.WORDS['app']} box. The restore continues by itself.")
 
     def _stop_helper(self) -> None:
         if self.helper_proc is not None and self.helper_proc.poll() is None:
@@ -812,13 +821,12 @@ def _setup_state(udid: str) -> str:
 
 def _restore_process_running() -> bool:
     """macOS runs the transfer in the AppleMobileBackup helper; it is busy for the whole restore
-    (about 11 minutes for a 9 GB backup) and exits at the end. Observed live 2026-11-09."""
-    if sys.platform != "darwin":
-        return False
-    try:
-        return subprocess.run(["pgrep", "-f", "AppleMobileBackup"], capture_output=True, timeout=5).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+    (about 11 minutes for a 9 GB backup) and exits at the end. Observed live 2026-11-09.
+    Windows: iTunes ships AppleMobileBackup.exe in Common Files\Apple\Mobile Device Support; that it runs the
+    transfer there too is UNVERIFIED (check during the first Windows restore). If it doesn't, this stays False and
+    Run._finish relies on the phone's own SetupState."""
+    from common import process_running
+    return process_running("AppleMobileBackup")
 
 
 def announce_backups(plan: Dict[str, Any], say: Callable[[str], None] = gates.say) -> List[str]:
@@ -901,7 +909,20 @@ def restore(udid: Optional[str], source: str, max_age_hours: float, confirm: boo
         return 2, r
 
     if sys.platform != "darwin" and driver is None:
-        r = gates.refusal("unsupported_platform", "Driving Finder only works on a Mac.")
+        route = gates.restore_route()
+        if not route.get("kind"):
+            return 2, gates.no_restore_app_refusal(route, before_erase=False)
+        # The iTunes driver (TODO WD2) needs the UI captures from a first observed restore (WD1/WD7). Until then the
+        # agent does the clicks with its OS-control MCP and this script only gates and watches.
+        r = gates.refusal(
+            "itunes_driver_not_ready",
+            f"I can't drive {gates.WORDS['app']} by script yet, so I'll do the clicks by looking at the screen. "
+            "The checks above all passed.",
+            [{"id": "agent_drives", "label": f"Let me drive {gates.WORDS['app']} by looking at the screen (I won't click "
+                                             "'Restore Backup...' on the Summary page, and I pick only the backup named above)."},
+             {"id": "restore_on_mac", "label": "Do the restore on a Mac instead."},
+             gates.STOP_OPTION],
+            route=route, plan=plan)
         return 2, r
 
     drv = driver or FinderDriver(plan["udid"])

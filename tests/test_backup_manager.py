@@ -220,6 +220,19 @@ class TrashGuards(unittest.TestCase):
         self.assertFalse(old.exists())
         self.assertTrue((self.home / ".Trash" / old.name / "Manifest.db").is_file())
 
+    def test_windows_moves_aside_next_to_the_backup_root_not_the_recycle_bin(self):
+        make_backup(self.root, UDID, apps=45, age_hours=1, manifest=b"b" * 30)
+        old = make_backup(self.root, f"{UDID}-20261109-175000", apps=40, age_hours=20, manifest=b"a" * 30)
+        with mock.patch.object(bm.sys, "platform", "win32"):
+            res = bm.trash_backup(UDID, old.name)
+        self.assertTrue(res["ok"], res)
+        self.assertFalse(old.exists())
+        moved = self.root.parent / bm.REMOVED_DIR_NAME / old.name
+        self.addCleanup(lambda: __import__("shutil").rmtree(moved.parent, ignore_errors=True))
+        self.assertTrue((moved / "Manifest.db").is_file())
+        self.assertIn("Removed Backups", res["message"])
+        self.assertFalse((self.home / ".Trash").exists())
+
     def test_refuses_live_protected_and_foreign_folders(self):
         make_backup(self.root, UDID, apps=45)
         make_backup(self.root, f"{UDID}-prewipe", apps=45)

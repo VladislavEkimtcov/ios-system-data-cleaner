@@ -37,6 +37,8 @@ class ITunesStatus:
     backup_root_exists: bool
     backup_count: int
     recommendations: List[str]
+    # What this computer can RESTORE with (see restore_app()): {"kind", "exe", "version"}; kind None = nothing.
+    restore_app: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -55,6 +57,74 @@ def get_apple_itunes_download_url() -> str:
 # Kept as a name for callers/tests; the single implementation lives in common.backup_root
 # (the old copy here had drifted: it ignored MOBILESYNC_BACKUP_DIR).
 get_itunes_backup_root = backup_root
+
+
+# Microsoft Store package names (Get-AppxPackage -Name). "AppleInc.AppleDevices" is the Windows 11 app that
+# replaces iTunes for phones; "AppleInc.iTunes" is the Store build of iTunes.
+_APPX_NAMES = {"apple_devices": "AppleInc.AppleDevices", "itunes_store": "AppleInc.iTunes"}
+
+
+def _itunes_exe_candidates() -> List[Path]:
+    out: List[Path] = []
+    if winreg is not None:
+        for root, subkey in ((winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Apple Computer, Inc.\iTunes"),
+                             (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes")):
+            try:
+                with winreg.OpenKey(root, subkey) as k:
+                    folder, _ = winreg.QueryValueEx(k, "InstallDir")
+                    out.append(Path(str(folder)) / "iTunes.exe")
+            except OSError:
+                pass
+    for env, default in (("ProgramFiles", r"C:\Program Files"), ("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+        out.append(Path(os.environ.get(env, default)) / "iTunes" / "iTunes.exe")
+    return out
+
+
+def _appx(name: str) -> Optional[Dict[str, str]]:
+    """Get-AppxPackage through Windows PowerShell 5.1 (powershell.exe). It fails under pwsh 7 on LTSC, so never pwsh."""
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             f"Get-AppxPackage -Name '{name}' | ForEach-Object {{ $_.Version + '|' + $_.InstallLocation }}"],
+            capture_output=True, text=True, check=False, timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    line = next((ln.strip() for ln in (proc.stdout or "").splitlines() if "|" in ln), "")
+    if not line:
+        return None
+    ver, loc = line.split("|", 1)
+    return {"version": ver, "location": loc}
+
+
+def restore_app() -> Dict[str, Any]:
+    """Which app on this computer can restore a phone from a backup: {"kind", "exe", "version"}.
+
+    kind: "finder" (macOS, always there), "itunes_win32", "itunes_store", "apple_devices", or None (nothing:
+    do NOT let the person erase the phone). A Win32 iTunes counts only if iTunes.exe really exists, not just a
+    leftover registry key."""
+    if sys.platform == "darwin":
+        return {"kind": "finder", "exe": None, "version": None}
+    if sys.platform != "win32":
+        return {"kind": None, "exe": None, "version": None}
+    for exe in _itunes_exe_candidates():
+        if exe.is_file():
+            ver = None
+            if winreg is not None:
+                for subkey in (r"SOFTWARE\Apple Computer, Inc.\iTunes", r"SOFTWARE\WOW6432Node\Apple Computer, Inc.\iTunes"):
+                    try:
+                        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as k:
+                            ver = str(winreg.QueryValueEx(k, "Version")[0])
+                            break
+                    except OSError:
+                        pass
+            return {"kind": "itunes_win32", "exe": str(exe), "version": ver}
+    for kind in ("itunes_store", "apple_devices"):
+        pkg = _appx(_APPX_NAMES[kind])
+        if pkg:
+            return {"kind": kind, "exe": pkg["location"] or None, "version": pkg["version"]}
+    return {"kind": None, "exe": None, "version": None}
 
 
 def check_itunes_installation() -> ITunesStatus:
@@ -81,6 +151,7 @@ def check_itunes_installation() -> ITunesStatus:
             backup_root_exists=backup_root_exists,
             backup_count=backup_count,
             recommendations=[],
+            restore_app=restore_app(),
         )
 
     itunes_installed = False
@@ -111,7 +182,7 @@ def check_itunes_installation() -> ITunesStatus:
     if not itunes_installed:
         try:
             proc = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", "Get-AppxPackage -Name '*iTunes*' | Select-Object -ExpandProperty Version"],
+                ["powershell.exe", "-NoProfile", "-Command", "Get-AppxPackage -Name '*iTunes*' | Select-Object -ExpandProperty Version"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -141,7 +212,7 @@ def check_itunes_installation() -> ITunesStatus:
     # 3. Check Apple Mobile Device Service (AMDS)
     try:
         proc = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", "Get-Service -Name 'Apple Mobile Device Service' -ErrorAction SilentlyContinue | Select-Object -Property Status"],
+            ["powershell.exe", "-NoProfile", "-Command", "Get-Service -Name 'Apple Mobile Device Service' -ErrorAction SilentlyContinue | Select-Object -Property Status"],
             capture_output=True,
             text=True,
             check=False,
@@ -162,6 +233,15 @@ def check_itunes_installation() -> ITunesStatus:
                 amds_installed = True
         except OSError:
             pass
+
+    # A registry key alone is not an installation (an uninstall can leave it behind): judge by what can restore.
+    route = restore_app()
+    if route["kind"] is None:
+        itunes_installed, install_type = False, "None"
+    elif route["kind"] == "itunes_win32" and itunes_version in (None, "Detected on disk"):
+        itunes_version = route["version"] or itunes_version
+    elif route["kind"] == "apple_devices":
+        install_type, itunes_version = "Apple Devices", route["version"]
 
     # Build recommendations
     dl_url = get_apple_itunes_download_url()
@@ -187,6 +267,7 @@ def check_itunes_installation() -> ITunesStatus:
         backup_root_exists=backup_root_exists,
         backup_count=backup_count,
         recommendations=recommendations,
+        restore_app=route,
     )
 
 

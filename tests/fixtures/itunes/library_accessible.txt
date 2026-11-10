@@ -1,0 +1,59 @@
+WINDOW|||iTunes
+W|||pane|||Music Introduction||||||true|||-1522868656|||486,186,1341,821
+W|||static text|||Music||||||true|||-1646965744|||573,358,144,75
+W|||button|||Sign in to the iTunes Store||||||true|||-1640151200|||856,635,304,50
+W|||button|||Go to the iTunes Store||||||true|||-1640155568|||573,635,265,50
+W|||static text|||Songs and videos you add to iTunes appear in your music library. Your music purchases in iCloud will also appear whenever you’re signed in to the iTunes Store.||||||true|||-1646969856|||573,487,696,88
+W|||pane|||||||||true|||-1638171152|||186,186,300,821
+W|||tree|||Library Sidebar|||Albums|||true|||-1638209392|||186,186,300,821
+W|||button|||Hide||||||true|||-1511738128|||436,724,36,22
+W|||button|||Music Playlists||||||true|||-1511720656|||195,719,140,30
+W|||button|||Hide||||||true|||-1511742496|||436,404,36,22
+W|||static text|||Devices||||||true|||-1512411632|||204,403,58,22
+W|||button|||Edit||||||true|||-1511755600|||442,192,30,22
+W|||static text|||Library||||||true|||-1512415744|||204,191,54,22
+W|||treeitem|||Library, Edit|||0|||true||||||186,186,300,32
+W|||treeitem|||Recently Added|||0|||true||||||186,218,300,36
+W|||treeitem|||Artists|||0|||true||||||186,254,300,36
+W|||treeitem|||Albums|||1|||true||||||186,290,300,36
+W|||treeitem|||Songs|||0|||true||||||186,326,300,36
+W|||treeitem|||Genres|||0|||true||||||186,362,300,36
+W|||treeitem|||Devices, Hide|||0|||true||||||186,398,300,32
+W|||treeitem|||Персик |||0|||true||||||186,430,300,36
+W|||treeitem|||Videos|||0|||true||||||186,466,300,36
+W|||treeitem|||Music|||0|||true||||||186,502,300,36
+W|||treeitem|||Movies|||0|||true||||||186,538,300,36
+W|||treeitem|||TV Shows|||0|||true||||||186,574,300,36
+W|||treeitem|||Books|||0|||true||||||186,610,300,36
+W|||treeitem|||Audiobooks|||0|||true||||||186,646,300,36
+W|||treeitem|||Tones|||0|||true||||||186,682,300,36
+W|||treeitem|||Music Playlists, Hide|||0|||true||||||186,718,300,32
+W|||treeitem|||Genius|||0|||true||||||186,750,300,36
+W|||custom|||||||||false||||||
+W|||pane|||||||||true|||-1523039376|||786,140,442,38
+W|||radio button|||Store|||0|||true|||-1516362032|||1152,140,76,38
+W|||radio button|||Radio|||0|||true|||-1514094128|||1070,140,81,38
+W|||radio button|||Browse|||0|||true|||-1514098000|||975,140,94,38
+W|||radio button|||For You|||0|||true|||-1640021888|||877,140,97,38
+W|||radio button|||Library|||1|||true|||-1640025760|||786,140,90,38
+W|||button|||iPhone||||||true|||-1523063536|||501,140,38,38
+W|||button|||Music||||||true|||ITID:1030|||303,140,189,38
+W|||button|||Forward||||||false|||ITID:5001|||252,140,42,38
+W|||button|||Back||||||false|||ITID:5000|||213,140,41,38
+W|||text field|||Search||||||true|||-1523487072|||1433,45,266,47
+W|||button|||up next||||||true|||ITID:4002|||1348,47,68,46
+W|||group|||LCD section||||||true|||-1639184624|||679,36,655,68
+W|||slider|||volume|||100 percent|||true|||ITID:3003|||419,54,165,33
+W|||button|||next||||||false|||ITID:3002|||357,47,45,45
+W|||button|||play||||||false|||ITID:3001|||298,47,45,45
+W|||button|||previous||||||false|||ITID:3000|||239,47,45,45
+W|||menubar|||Application||||||true|||-1639727152|||186,104,1641,30
+W|||menu item|||Song||||||true|||-1638245488|||289,104,61,30
+W|||menu item|||Help||||||true|||-1637364368|||581,104,58,30
+W|||menu item|||Account||||||true|||-1637368224|||495,104,86,30
+W|||menu item|||Controls||||||true|||-1637372080|||408,104,87,30
+W|||menu item|||View||||||true|||-1637375936|||350,104,58,30
+W|||menu item|||Edit||||||true|||-1637379792|||238,104,51,30
+W|||menu item|||File||||||true|||-1639722432|||191,104,47,30
+W|||custom|||||||||true||||||
+COUNT|||57
