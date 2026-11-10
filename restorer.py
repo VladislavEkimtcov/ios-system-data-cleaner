@@ -6,9 +6,7 @@ back into setup mode ('Hello' screen):
   1. USB Reconnection & Setup State Detector (`wait_for_device_return`)
   2. Finder activation of an erased phone (`activate_via_finder`)
   3. The restore itself lives in `finder_restore.py` (`restorer.py ui-restore`): a deterministic
-     state machine over Finder's UI that hands off to the agent when a step goes wrong. The
-     older `stage_finder_restore_selection` / `auto_confirm_finder_restore_sheet` /
-     `monitor_restore_progress` helpers below are low-level debugging aids; don't use them for a real restore.
+     state machine over Finder's UI that hands off to the agent when a step goes wrong.
   4. Post-Restore Verification & Storage Delta Tracker (`audit_post_restore_storage`)
 """
 
@@ -20,10 +18,9 @@ import plistlib
 import subprocess
 import sys
 import time
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from common import backup_root, connected_udids, find_tool, make_prewipe_clone, wait_until
+from common import backup_root, connected_udids, find_tool, wait_until
 
 
 def get_connected_udids() -> List[str]:
@@ -263,79 +260,6 @@ def device_window_match(udid: Optional[str] = None) -> str:
     return "(" + " or ".join(clauses) + ")"
 
 
-def detect_finder_setup_view(udid: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Inspects macOS Finder for an iOS device setup window ('Welcome to your new iPhone').
-    Returns UI element status.
-    """
-    match = device_window_match(udid)
-    script = '''
-    tell application "System Events"
-        tell process "Finder"
-            set winList to every window
-            set foundWin to missing value
-            repeat with w in winList
-                set wName to name of w
-                if __DEVICE_WINDOW_MATCH__ then
-                    set foundWin to w
-                    exit repeat
-                end if
-            end repeat
-            
-            if foundWin is missing value then
-                return "NO_WINDOW"
-            end if
-            
-            set winName to name of foundWin
-            set allStaticTexts to {}
-            try
-                set txtList to value of every static text of splitter group 1 of splitter group 1 of foundWin
-                set allStaticTexts to txtList
-            end try
-            
-            set hasWelcome to false
-            repeat with t in allStaticTexts
-                if (t as text) contains "Welcome" or (t as text) contains "Set up" or (t as text) contains "Restore" then
-                    set hasWelcome to true
-                end if
-            end repeat
-            
-            set radioTexts to {}
-            try
-                -- Direct children of splitter group 1 of splitter group 1
-                set rList to every radio button of splitter group 1 of splitter group 1 of foundWin
-                repeat with r in rList
-                    set end of radioTexts to (name of r as text) & " [selected=" & (value of r as text) & "]"
-                end repeat
-            end try
-            
-            set selectedBackup to ""
-            try
-                set selectedBackup to value of pop up button 1 of splitter group 1 of splitter group 1 of foundWin as text
-            end try
-            
-            return winName & "|||" & (hasWelcome as text) & "|||" & (radioTexts as string) & "|||" & selectedBackup
-        end tell
-    end tell
-    '''.replace("__DEVICE_WINDOW_MATCH__", match)
-    try:
-        out = subprocess.check_output(["osascript", "-e", script], text=True).strip()
-        if out == "NO_WINDOW":
-            return {"found": False, "reason": "No iPhone window in Finder"}
-        parts = out.split("|||")
-        win_name = parts[0] if len(parts) > 0 else ""
-        has_welcome = (parts[1] == "true") if len(parts) > 1 else False
-        radio_info = parts[2] if len(parts) > 2 else ""
-        selected_backup = parts[3] if len(parts) > 3 else ""
-        return {
-            "found": True,
-            "window_name": win_name,
-            "has_welcome": has_welcome,
-            "radio_info": radio_info,
-            "selected_backup": selected_backup,
-        }
-    except Exception as e:
-        return {"found": False, "error": str(e)}
 
 
 def finder_window_titles() -> List[str]:
@@ -349,6 +273,29 @@ def finder_window_titles() -> List[str]:
     return [t.strip() for t in out.split(", ")] if out else []
 
 
+def real_click(x: float, y: float, timeout: float = 15.0) -> bool:
+    """A genuine mouse click at screen point (x, y), posted as a hardware-level event. Needed because System
+    Events' scripted `click` only highlights Finder's sidebar row and opens a pop-up in a way a script can't
+    read afterwards (both seen live 2026-11-10). A real click does both. macOS only; needs the same
+    Accessibility permission the rest of the Finder scripting already needs."""
+    if sys.platform != "darwin":
+        return False
+    jxa = (
+        "ObjC.import('CoreGraphics'); ObjC.import('Foundation');"
+        f"var p = $.CGPointMake({float(x)}, {float(y)});"
+        "function ev(t){ return $.CGEventCreateMouseEvent(null, t, p, $.kCGMouseButtonLeft); }"
+        "$.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, $.kCGEventMouseMoved, p, $.kCGMouseButtonLeft));"
+        "delay(0.15);"
+        "$.CGEventPost($.kCGHIDEventTap, ev($.kCGEventLeftMouseDown)); delay(0.08);"
+        "$.CGEventPost($.kCGHIDEventTap, ev($.kCGEventLeftMouseUp));"
+    )
+    try:
+        subprocess.run(["osascript", "-l", "JavaScript", "-e", jxa], capture_output=True, timeout=timeout, check=True)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def select_device_in_finder(udid: Optional[str] = None) -> Dict[str, Any]:
     """Opens a Finder window and tries to open the phone from the sidebar (row found by name through
     the accessibility tree, no hard-coded coordinates). Opening the phone in Finder is what makes
@@ -359,14 +306,15 @@ def select_device_in_finder(udid: Optional[str] = None) -> Dict[str, Any]:
     with the row's live position for an agent (vision click) or the person.
     """
     names = list(dict.fromkeys(n for n in device_window_names(udid) + ["iPhone", "iPad"] if n))
-    wanted = "{" + ", ".join(_applescript_str(n) for n in names) + "}"
+    # Finder's sidebar row can carry a trailing space ("Персик "): match both spellings
+    wanted = "{" + ", ".join(_applescript_str(n) for n in names + [n + " " for n in names]) + "}"
     script = f'''
     set wanted to {wanted}
     tell application "Finder"
         activate
-        if (count of Finder windows) is 0 then make new Finder window
+        make new Finder window   -- a fresh window: its sidebar layout is predictable, the person's own windows stay as they are
     end tell
-    delay 0.5
+    delay 0.7
     tell application "System Events" to tell process "Finder"
         set sb to outline 1 of scroll area 1 of splitter group 1 of window 1
         repeat with r in rows of sb
@@ -375,7 +323,6 @@ def select_device_in_finder(udid: Optional[str] = None) -> Dict[str, Any]:
                 if wanted contains (t as text) then
                     set p to position of r
                     set sz to size of r
-                    click at {{(item 1 of p) + 40, (item 2 of p) + ((item 2 of sz) / 2)}}
                     return "ROW|||" & (t as text) & "|||" & (item 1 of p) & "|||" & (item 2 of p) & "|||" & (item 1 of sz) & "|||" & (item 2 of sz)
                 end if
             end try
@@ -390,12 +337,13 @@ def select_device_in_finder(udid: Optional[str] = None) -> Dict[str, Any]:
     if not out.startswith("ROW"):
         return {"success": False, "reason": "The phone isn't listed in Finder's sidebar yet"}
     _, row, x, y, w, h = out.split("|||")
-    if wait_until(lambda: any(t in names for t in finder_window_titles()), timeout=4.0, interval=0.5):
-        return {"success": True, "row": row}
     try:
-        cx, cy = int(float(x) + float(w) / 2), int(float(y) + float(h) / 2)
+        cx, cy = int(float(x) + min(float(w) / 2, 60)), int(float(y) + float(h) / 2)
     except ValueError:
         cx = cy = None
+    if cx is not None and real_click(cx, cy) and \
+            wait_until(lambda: any(t in names for t in finder_window_titles()), timeout=6.0, interval=0.5):
+        return {"success": True, "row": row}
     return {"success": False, "reason": "Finder highlighted the phone but didn't open it",
             "handoff": {"reason": "agent_handoff", "action": f"click the '{row}' row under Locations in the Finder sidebar",
                         "position_points": [cx, cy], "verify": "Finder shows the phone with 'Activating…' or a Welcome view"}}
@@ -451,90 +399,6 @@ def activate_via_finder(udid: str, timeout_sec: int = 180, verbose: bool = True)
             "The phone is still activating. Make sure the Mac is online and give it a few more minutes."}
 
 
-def stage_finder_restore_selection(
-    expected_backup_name: Optional[str] = None,
-    require_welcome: bool = True,
-    udid: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Selects 'Restore from this backup' in macOS Finder and clicks Continue — but only on a
-    device sitting in the post-wipe Welcome/Set-Up view, and only when the backup chosen in
-    the pop-up matches the expected device.
-
-    SAFETY:
-      - Refuses unless Finder shows the Welcome / Set Up / Restore view (require_welcome).
-        The old fallback that clicked 'Restore Backup…' in the Summary view is removed: on
-        a device that was NOT wiped, that overwrites live data.
-      - Aborts on a backup/device-name mismatch so we never restore the wrong backup.
-      - On any missing element it returns a structured 'agent handoff' result instead of
-        clicking something unverified.
-    """
-    match = device_window_match(udid)
-    view = detect_finder_setup_view(udid)
-    if not view.get("found"):
-        return {"success": False, "reason": "no_window",
-                "handoff": "No Finder iPhone/iPad window found. Bring the device window forward and retry."}
-
-    if require_welcome and not view.get("has_welcome"):
-        return {"success": False, "reason": "not_welcome_view",
-                "handoff": "Finder is not showing the Welcome/Set Up/Restore view. The device may not be "
-                           "wiped; refusing to click to avoid overwriting live data."}
-
-    selected = (view.get("selected_backup") or "").strip()
-    if expected_backup_name and selected and expected_backup_name.lower() not in selected.lower():
-        return {"success": False, "reason": "backup_mismatch", "selected_backup": selected,
-                "expected": expected_backup_name,
-                "handoff": f"Selected backup '{selected}' does not match expected device "
-                           f"'{expected_backup_name}'. Aborting; pick the correct backup manually."}
-
-    # Welcome view confirmed and backup matches: select the restore radio and Continue only.
-    script = '''
-    tell application "System Events"
-        tell process "Finder"
-            set winList to every window
-            set foundWin to missing value
-            repeat with w in winList
-                set wName to name of w
-                if __DEVICE_WINDOW_MATCH__ then
-                    set foundWin to w
-                    exit repeat
-                end if
-            end repeat
-            if foundWin is missing value then
-                return "AGENT_HANDOFF: no device window"
-            end if
-            try
-                set targetRadio to radio button "Restore from this backup:" of splitter group 1 of splitter group 1 of foundWin
-                click targetRadio
-            on error
-                try
-                    set targetRadio to radio button "Restore from this backup" of scroll area 1 of group 1 of group 1 of splitter group 1 of splitter group 1 of foundWin
-                    click targetRadio
-                end try
-            end try
-            set curBackup to ""
-            try
-                set curBackup to value of pop up button 1 of splitter group 1 of splitter group 1 of foundWin as text
-            end try
-            try
-                set btnContinue to button "Continue" of splitter group 1 of splitter group 1 of foundWin
-                click btnContinue
-                return "CLICKED_CONTINUE: " & curBackup
-            on error
-                return "AGENT_HANDOFF: Continue button not found for backup " & curBackup
-            end try
-        end tell
-    end tell
-    '''.replace("__DEVICE_WINDOW_MATCH__", match)
-    try:
-        res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
-    except Exception as e:
-        return {"success": False, "reason": "osascript_error", "error": str(e),
-                "handoff": "AppleScript could not drive Finder; an agent should click "
-                           "'Restore from this backup' then Continue."}
-    if res.startswith("AGENT_HANDOFF"):
-        return {"success": False, "reason": "agent_handoff", "result": res, "handoff": res}
-    return {"success": True, "result": res, "selected_backup": selected}
 
 
 def _finder_pid() -> Optional[str]:
@@ -575,206 +439,10 @@ def restart_finder_services(timeout_sec: float = 10.0, verbose: bool = True) -> 
         return False
 
 
-class RestorerSafetyError(Exception):
-    """Raised when hardware safety invariants or preconditions fail during automated restoration."""
-    pass
 
 
-def auto_confirm_finder_restore_sheet(
-    expected_udid: Optional[str] = None,
-    max_backup_age_hours: float = 2.0,
-    verbose: bool = True
-) -> Dict[str, Any]:
-    """
-    Safely confirms and clicks 'Restore' on Finder's backup password sheet if and only if:
-      1. Strictly ONE iOS device is connected to USB (preventing cross-device ambiguity).
-      2. The connected device UDID matches expected_udid (if specified).
-      3. No recent disconnect/reconnect flapping occurred (connection stability verified).
-      4. A verified, encrypted backup for this device completed within max_backup_age_hours.
-    """
-    # 1. Single phone invariant
-    connected = get_connected_udids()
-    if len(connected) == 0:
-        raise RestorerSafetyError("Safety halt: No iOS devices connected to USB.")
-    if len(connected) > 1:
-        raise RestorerSafetyError(
-            f"Safety halt: Multiple iOS devices connected ({connected}). Aborting to prevent cross-device restore ambiguity."
-        )
-
-    actual_udid = connected[0]
-    target_udid = expected_udid or os.environ.get("TARGET_UDID")
-    if target_udid and actual_udid != target_udid:
-        raise RestorerSafetyError(
-            f"Safety halt: Connected device ({actual_udid}) does not match expected target ({target_udid})."
-        )
-
-    # 2. Connection stability check (verify no flapping in last few seconds)
-    info1 = query_device_info(actual_udid)
-    time.sleep(1.0)
-    info2 = query_device_info(actual_udid)
-    if not info1 or not info2:
-        raise RestorerSafetyError("Safety halt: USB connection is unstable or device is still booting.")
-
-    # 3. Freshness & Encryption check on backup
-    b_path = backup_root() / actual_udid
-    status_plist = b_path / "Status.plist"
-    manifest_plist = b_path / "Manifest.plist"
-    info_plist = b_path / "Info.plist"
-
-    if not status_plist.exists() or not manifest_plist.exists() or not info_plist.exists():
-        raise RestorerSafetyError(f"Safety halt: No verified backup structure found at {b_path}.")
-
-    # 3b. The immutable pre-wipe safety clone must exist before we confirm a restore.
-    prewipe = b_path.parent / f"{actual_udid}-prewipe"
-    if not prewipe.is_dir():
-        raise RestorerSafetyError(
-            f"Safety halt: pre-wipe safety clone '{prewipe.name}' not found. "
-            "Run the backup/revive step that creates it before auto-confirming a restore."
-        )
-
-    with open(status_plist, "rb") as f:
-        st = plistlib.load(f)
-    if st.get("SnapshotState") != "finished":
-        raise RestorerSafetyError(f"Safety halt: Backup snapshot state is '{st.get('SnapshotState')}', not 'finished'.")
-
-    with open(manifest_plist, "rb") as f:
-        mf = plistlib.load(f)
-    if not mf.get("IsEncrypted"):
-        raise RestorerSafetyError("Safety halt: Backup is not encrypted (Keychain/2FA tokens missing).")
-
-    with open(info_plist, "rb") as f:
-        inf = plistlib.load(f)
-    last_b_date = inf.get("Last Backup Date")
-    age_hours = 0.0
-    if last_b_date:
-        from datetime import datetime, timezone
-        if last_b_date.tzinfo is None:
-            last_b_date = last_b_date.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        age_hours = (now - last_b_date).total_seconds() / 3600.0
-        if age_hours > max_backup_age_hours:
-            raise RestorerSafetyError(
-                f"Safety halt: Backup is too old ({age_hours:.1f} hours > max {max_backup_age_hours} hours)."
-            )
-
-    if verbose:
-        print(f"[+] Safety Invariants Verified: Exactly 1 device ({actual_udid}), recent encrypted backup ({age_hours:.2f}h old), stable USB link.")
-
-    # 4. Trigger AppleScript on Finder sheet
-    match = device_window_match(actual_udid)
-    script = '''
-    tell application "System Events"
-        tell process "Finder"
-            set winList to every window
-            set targetSheet to missing value
-            repeat with w in winList
-                set wName to name of w
-                if __DEVICE_WINDOW_MATCH__ then
-                    try
-                        set sList to every sheet of w
-                        if (count of sList) > 0 then
-                            set targetSheet to sheet 1 of w
-                            exit repeat
-                        end if
-                    end try
-                end if
-            end repeat
-            
-            if targetSheet is missing value then
-                return "NO_SHEET"
-            end if
-            
-            try
-                set btnRestore to button "Restore" of targetSheet
-                click btnRestore
-                return "CLICKED_RESTORE"
-            on error err
-                return "ERROR: " & err
-            end try
-        end tell
-    end tell
-    '''.replace("__DEVICE_WINDOW_MATCH__", match)
-    res = subprocess.check_output(["osascript", "-e", script], text=True).strip()
-    return {
-        "success": (res == "CLICKED_RESTORE"),
-        "result": res,
-        "udid": actual_udid,
-        "backup_age_hours": round(age_hours, 2),
-    }
 
 
-def monitor_restore_progress(
-    expected_udid: str,
-    timeout_sec: int = 2400,
-    poll_interval: float = 4.0,
-    verbose: bool = True
-) -> Dict[str, Any]:
-    """
-    Monitors Finder sync/restore status text and device reboot cycle until complete.
-    """
-    if verbose:
-        print("[*] Monitoring Finder restoration progress...")
-
-    start = time.time()
-    last_status = ""
-    reboot_detected = False
-    # Resolved once: the device drops off USB mid-restore, but its backup's Info.plist still
-    # names the window it will come back as.
-    match = device_window_match(expected_udid)
-
-    while time.time() - start < timeout_sec:
-        # Check Finder status text
-        script = '''
-        tell application "System Events"
-            tell process "Finder"
-                set winList to every window
-                repeat with w in winList
-                    set wName to name of w
-                    if __DEVICE_WINDOW_MATCH__ then
-                        try
-                            set tList to value of every static text of splitter group 1 of splitter group 1 of w
-                            try
-                                set tList2 to value of every static text of group 1 of splitter group 1 of splitter group 1 of w
-                                set tList to tList & tList2
-                            end try
-                            return tList as string
-                        end try
-                    end if
-                end repeat
-                return ""
-            end tell
-        end tell
-        '''.replace("__DEVICE_WINDOW_MATCH__", match)
-        try:
-            status_text = subprocess.check_output(["osascript", "-e", script], text=True).strip()
-            if status_text and status_text != last_status:
-                if verbose:
-                    print(f"[*] Finder Status: {status_text}")
-                last_status = status_text
-
-            if "Restoring" in status_text:
-                pass
-            elif "Syncing" in status_text and "Step" in status_text:
-                pass
-            elif reboot_detected and ("Available" in status_text or status_text == ""):
-                # Finished reboot and back to normal
-                if verbose:
-                    print("[+] Device completed restore and post-restore reboot!")
-                return {"status": "complete", "last_status": status_text}
-
-        except Exception:
-            pass
-
-        # Also watch USB connection for the post-restore reboot
-        udids = get_connected_udids()
-        if expected_udid not in udids and not reboot_detected:
-            reboot_detected = True
-            if verbose:
-                print("[*] Device disconnected for post-restore reboot...")
-
-        time.sleep(poll_interval)
-
-    return {"status": "timeout", "last_status": last_status}
 
 
 def audit_post_restore_storage(udid: str, verbose: bool = True) -> Dict[str, Any]:
@@ -835,33 +503,19 @@ def main() -> int:
     p_wait.add_argument("--timeout", type=int, default=600, help="Timeout in seconds")
     p_wait.add_argument("--expect-reset", action="store_true", help="First wait for currently-connected device to disconnect, then wait for reboot")
 
-    # Subcommand: stage-finder
-    p_stg = subparsers.add_parser("stage-finder", help="Detect & stage Finder restore UI")
-    p_stg.add_argument("--auto-confirm", action="store_true", help="Auto-confirm restore password sheet with safety invariants")
-    p_stg.add_argument("--udid", default=default_udid, help="Target device UDID")
-
-    # Subcommand: confirm-sheet
-    p_cnf = subparsers.add_parser("confirm-sheet", help="Safely auto-confirm Finder restore password sheet")
-    p_cnf.add_argument("--udid", default=default_udid, help="Target device UDID")
-    p_cnf.add_argument("--max-age-hours", type=float, default=2.0, help="Maximum allowed backup age in hours")
-
-    # Subcommand: monitor-restore
-    p_mon = subparsers.add_parser("monitor-restore", help="Monitor restore progress")
-    p_mon.add_argument("--udid", default=default_udid, help="Target device UDID")
-
     # Subcommand: audit
     p_audit = subparsers.add_parser("audit", help="Audit post-restore device storage")
     p_audit.add_argument("--udid", default=default_udid, help="Target device UDID")
 
-    # Subcommand: heal-finder
     # Subcommand: activate (consented Finder step that makes the Mac activate an unactivated phone)
     p_act = subparsers.add_parser("activate", help="Open the phone in Finder so the Mac activates it (needs the person's OK)")
     p_act.add_argument("--udid", default=default_udid, help="Target device UDID")
     p_act.add_argument("--timeout", type=int, default=180, help="Seconds to wait for activation")
 
-    p_bk = subparsers.add_parser("backups", help="List every backup of this phone on this Mac with its stats "
-                                                  "(when taken, app count, 2FA apps, Keychain, size). Read-only.")
+    p_bk = subparsers.add_parser("backups", help="List every backup of this phone on this Mac with its stats (when taken, "
+                                                  "app count, 2FA apps, Keychain, size) and propose the next clean-up move.")
     p_bk.add_argument("--udid", default=default_udid, help="Target device UDID")
+    p_bk.add_argument("--trash", metavar="FOLDER", help="Move this one backup to the Trash (only after the person said yes)")
 
     # Subcommand: ui-restore (THE restore: deterministic Finder UI driving, agent handoff on trouble)
     subparsers.add_parser("ui-restore", help="Restore by driving Finder deterministically (hands off to the agent when stuck). "
@@ -884,16 +538,12 @@ def main() -> int:
             print(f"[!] {e}")
             return 1
     elif args.command == "backups":
-        import restore_gates
+        import backup_manager
         u = args.udid or (get_connected_udids() or [None])[0]
         if not u:
             print("[!] No phone connected.")
             return 2
-        lines = restore_gates.describe_backups(restore_gates.available_backups(u))
-        print(f"BACKUPS_AVAILABLE: {sum(1 for l in lines if not l.startswith(' '))} backup(s) of this phone on this Mac.")
-        for ln in lines:
-            print("  - " + ln if not ln.startswith(" ") else "    " + ln.strip())
-        return 0
+        return backup_manager.main(["--udid", u] + (["--trash", args.trash] if args.trash else []))
     elif args.command == "activate":
         u = args.udid or (get_connected_udids() or [None])[0]
         if not u:
@@ -902,33 +552,6 @@ def main() -> int:
         res = activate_via_finder(u, timeout_sec=args.timeout)
         print(res.get("message") or res)
         return 0 if res.get("success") else 1
-    elif args.command == "stage-finder":
-        ui_info = detect_finder_setup_view()
-        print(f"Finder Setup View: {ui_info}")
-        res = stage_finder_restore_selection()
-        print(f"Stage Result: {res}")
-        if not res.get("success"):
-            return 1
-        if args.auto_confirm:
-            time.sleep(1.0)
-            try:
-                c_res = auto_confirm_finder_restore_sheet(expected_udid=args.udid)
-                print(f"Auto-Confirm Result: {c_res}")
-            except RestorerSafetyError as err:
-                print(f"[!] Auto-confirm aborted for safety: {err}")
-                return 1
-        return 0
-    elif args.command == "confirm-sheet":
-        try:
-            c_res = auto_confirm_finder_restore_sheet(expected_udid=args.udid, max_backup_age_hours=args.max_age_hours)
-            print(f"Auto-Confirm Result: {c_res}")
-            return 0
-        except RestorerSafetyError as err:
-            print(f"[!] Safety check rejected restore confirmation: {err}")
-            return 1
-    elif args.command == "monitor-restore":
-        monitor_restore_progress(args.udid)
-        return 0
     elif args.command == "audit":
         audit_post_restore_storage(args.udid)
         return 0

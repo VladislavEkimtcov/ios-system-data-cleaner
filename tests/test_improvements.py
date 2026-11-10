@@ -1,6 +1,6 @@
 """
 Coverage for the hardening work: the clone helper, no-plaintext password storage, the web
-UI's token/Host guards, the MCP stdio round trip, stage-finder refusals, the tokens-verify
+UI's token/Host guards, the MCP stdio round trip, the tokens-verify
 same-backup warning, the fail-closed proof gate, and year-derived variants.
 """
 
@@ -159,42 +159,6 @@ class TestMCPStdioRoundTrip(unittest.TestCase):
         self.assertIn("content", by_id[3]["result"])
         payload = json.loads(by_id[3]["result"]["content"][0]["text"])
         self.assertIn("verdict", payload)
-
-
-class TestStageFinderRefusal(unittest.TestCase):
-    def test_refuses_when_not_welcome_view(self):
-        import restorer
-        from unittest.mock import patch
-        with patch.object(restorer, "detect_finder_setup_view",
-                          return_value={"found": True, "has_welcome": False, "selected_backup": ""}):
-            res = restorer.stage_finder_restore_selection()
-        self.assertFalse(res["success"])
-        self.assertEqual(res["reason"], "not_welcome_view")
-
-    def test_refuses_on_backup_mismatch(self):
-        import restorer
-        from unittest.mock import patch
-        with patch.object(restorer, "detect_finder_setup_view",
-                          return_value={"found": True, "has_welcome": True, "selected_backup": "Someone Else's iPhone"}):
-            res = restorer.stage_finder_restore_selection(expected_backup_name="My iPhone")
-        self.assertFalse(res["success"])
-        self.assertEqual(res["reason"], "backup_mismatch")
-
-
-class TestAutoConfirmRequiresClone(unittest.TestCase):
-    def test_auto_confirm_requires_prewipe_clone(self):
-        import restorer
-        from unittest.mock import patch
-        tmp = tempfile.mkdtemp(prefix="restore_backup_")
-        backup = create_synthetic_backup(Path(tmp))
-        udid = backup.name
-        with patch.object(restorer, "connected_udids", return_value=[udid]), \
-             patch.object(restorer, "get_connected_udids", return_value=[udid]), \
-             patch.object(restorer, "query_device_info", return_value={"DeviceName": "x"}), \
-             patch.object(restorer, "backup_root", return_value=Path(tmp)):
-            # No -prewipe clone present -> safety halt.
-            with self.assertRaises(restorer.RestorerSafetyError):
-                restorer.auto_confirm_finder_restore_sheet(expected_udid=udid)
 
 
 class TestTokensVerifySameBackup(unittest.TestCase):

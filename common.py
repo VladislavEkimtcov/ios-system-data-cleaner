@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import plistlib
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 import shutil
 import subprocess
@@ -28,7 +28,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 GB = 1000 ** 3
 GIB = 1024 ** 3
 
-# Finder/iTunes "Archive" copies get a -YYYYMMDD-HHMMSS suffix; our safety clone is -prewipe.
+# Finder/iTunes "Archive" copies get a -YYYYMMDD-HHMMSS suffix; our safety clone is -prewipe, and older
+# generations of it (kept, never overwritten) are -prewipe-YYYYMMDD-HHMMSS.
 ARCHIVE_SUFFIX = re.compile(r"-\d{8}-\d{6}$|-prewipe$")
 PREWIPE_SUFFIX = "-prewipe"
 
@@ -545,6 +546,39 @@ def _backup_date(path: Path) -> Optional[datetime]:
         return None
 
 
+def archive_stamp(path: Path) -> str:
+    """YYYYMMDD-HHMMSS (local time) of when this backup was made, for naming an archived generation."""
+    d = _backup_date(path)
+    if d is not None:
+        d = d.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None) if d.tzinfo is None else d.astimezone().replace(tzinfo=None)
+    else:
+        try:
+            d = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            d = datetime.now()
+    return d.strftime("%Y%m%d-%H%M%S")
+
+
+def _free_name(parent: Path, base: str) -> Path:
+    cand, n = parent / base, 1
+    while cand.exists():
+        n += 1
+        cand = parent / f"{base}-{n}"
+    return cand
+
+
+def rotate_backup_aside(src: Path) -> Optional[Path]:
+    """Moves an existing backup folder to `<name>-<its own timestamp>` (an instant rename, nothing is
+    copied or deleted) so a new backup never overwrites it. Returns the archive path, or None when
+    there was nothing to move."""
+    src = Path(src)
+    if not src.is_dir():
+        return None
+    dest = _free_name(src.parent, f"{src.name}-{archive_stamp(src)}")
+    os.replace(str(src), str(dest))
+    return dest
+
+
 def _clone_is_current(src: Path, clone: Path) -> bool:
     """True when the clone holds the same (or a newer) backup than `src`."""
     s, c = _backup_date(src), _backup_date(clone)
@@ -628,8 +662,8 @@ def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
 
     - Never nests a copy inside an existing clone: if the final clone already exists,
       verifies and is as new as the source backup, it is kept as-is (immutable). A clone
-      of an OLDER backup is refreshed (new clone built and verified first, then swapped in),
-      because restoring from a stale safety copy would silently lose recent data.
+      of an OLDER backup is refreshed (new clone built and verified first, then swapped in);
+      the older clone is kept as `<src>-prewipe-<timestamp>`, never overwritten or deleted.
     - Clones to a temp sibling first, verifies the plists and a non-empty Manifest.db,
       then swaps it into place with an atomic rename.
     - Uses APFS copy-on-write (``cp -c``) on macOS when possible, robocopy on Windows,
@@ -690,10 +724,11 @@ def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:
         if not ok:
             raise CloneError(f"cloned copy failed verification ({why})")
 
-        # Swap into place. A stale clone is moved aside (inside tmp, deleted afterwards)
-        # only now that its replacement is verified.
+        # Swap into place. A stale clone is KEPT: renamed to `<name>-prewipe-<its timestamp>`
+        # (never deleted here; the agent proposes cleanup from the backup list), and only once
+        # its replacement is verified.
         if final.exists():
-            os.replace(str(final), str(tmp / "stale"))
+            os.replace(str(final), str(_free_name(final.parent, f"{final.name}-{archive_stamp(final)}")))
         os.replace(str(staging), str(final))
     except CloneError:
         shutil.rmtree(tmp, ignore_errors=True)

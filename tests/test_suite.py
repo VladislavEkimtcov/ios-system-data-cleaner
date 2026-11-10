@@ -222,17 +222,6 @@ class TestWallpaperMatching(unittest.TestCase):
 
 
 class TestRestorerSuite(unittest.TestCase):
-    def test_safety_check_fails_on_wrong_udid(self):
-        import restorer
-        with self.assertRaises(restorer.RestorerSafetyError):
-            restorer.auto_confirm_finder_restore_sheet(expected_udid="INVALID-NONEXISTENT-UDID-1234")
-
-    def test_detect_finder_setup_view_structure(self):
-        import restorer
-        res = restorer.detect_finder_setup_view()
-        self.assertIsInstance(res, dict)
-        self.assertIn("found", res)
-
     def test_cli_expect_reset_arg_parsing(self):
         import subprocess
         result = subprocess.run(

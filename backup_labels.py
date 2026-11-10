@@ -55,15 +55,23 @@ def label_for(kind: str, base: str, made: Optional[datetime]) -> str:
         return f"{base}{SEP}main{SEP}{_when(made)}"
     if kind == "safety":
         return f"{base}{SEP}safety copy{SEP}{_when(made)}"
+    if kind == "older_safety":
+        return f"{base}{SEP}older safety copy{SEP}{_when(made)}"
+    if kind == "protected":
+        return f"{base}{SEP}hand-protected copy{SEP}{_when(made)}"
     return f"{base}{SEP}extra copy"
 
 
 def _kind(folder: str, udid: str) -> Optional[str]:
     n, u = folder.lower(), udid.lower()
+    if n.startswith(".protected-") and u in n:
+        return "protected"          # a copy someone protected by hand; Finder lists these too, so label them
     if n == u:
         return "main"
     if n == u + PREWIPE:
         return "safety"
+    if re.fullmatch(re.escape(u) + r"-prewipe-\d{8}-\d{6}(-\d+)?", n):
+        return "older_safety"      # an earlier generation of the safety copy, kept instead of overwritten
     if n.startswith(u + "-"):
         return "extra"
     return None
@@ -142,7 +150,10 @@ def plan(udid: str) -> List[Dict[str, Any]]:
             # Finder writes its own timestamp into these copies' Display Name ("Яблоко - Nov 9, 2026 at 8:39 PM"):
             # keep it, it is what tells the copies apart
             m = _DATE_SUFFIX.search(original)
-            new += m.group(0).rstrip() if m else ""
+            if m:
+                new += m.group(0).rstrip()
+            elif isinstance(made, datetime):
+                new += f"{SEP}{_when(made)}"      # rotated-aside backups have no Finder date: say when they were made
         rows.append({"folder": p.name, "kind": kind, "path": info_path, "original": original, "current": current,
                      "real_name": real_name, "legacy": LEGACY_ORIG_KEY in info, "new": new})
     return rows

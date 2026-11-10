@@ -13,7 +13,7 @@ Fulfills the 'Smart Friend on the Couch' paradigm:
      check-in every few minutes (see backup_progress.py and `--watch`).
    - Detects completion: plays Hero chime & dispatches completion notification.
 3. Live persistent state tracking in `.backup_status.json` for agent/CLI monitoring.
-4. Autonomous post-flight verification, APFS CoW snapshotting, and authoritative backup consolidation.
+4. Autonomous post-flight verification, APFS CoW snapshotting, and a whole-new-backup policy (the previous backup is kept, never overwritten).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import getpass
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -33,7 +34,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from common import (
     GB,
-    PREWIPE_SUFFIX,
+    _free_name,
+    archive_stamp,
+    rotate_backup_aside,
     CloneError,
     backup_root,
     host_mount,
@@ -106,7 +109,6 @@ class BackupRunner:
         password: Optional[str] = None,
         play_audio: bool = True,
         show_notifications: bool = True,
-        authoritative: bool = False,
         status_file: Optional[Path] = None,
         verbose: bool = True,
         checkin_minutes: float = 5.0,
@@ -117,7 +119,6 @@ class BackupRunner:
         self._last_error = ""
         self.play_audio = play_audio
         self.show_notifications = show_notifications
-        self.authoritative = authoritative
         self.status_file = status_file or STATUS_FILE
         self.verbose = verbose
 
@@ -342,6 +343,18 @@ class BackupRunner:
         )
         self.log("[*] Initializing mobilebackup2 service and streaming backup...")
 
+        # A backup is a WHOLE NEW backup: the previous one is renamed aside (an instant rename, nothing is
+        # copied or deleted) so this run can never overwrite it. If this run fails, it is put back.
+        self._archived: Optional[Path] = None
+        if self.udid:
+            try:
+                self._archived = rotate_backup_aside(self.backup_dir / self.udid)
+            except OSError as e:
+                self.update_status("failed", error=f"couldn't set the previous backup aside: {e}")
+                return False, f"Couldn't set the previous backup aside, so I did not start (nothing was changed): {e}"
+            if self._archived:
+                self.log(f"  📦 Previous backup kept as: {self._archived.name} (never overwritten)")
+
         cmd = ["idevicebackup2", "backup", "--full"]
         if self.udid:
             cmd.extend(["-u", self.udid])
@@ -382,7 +395,26 @@ class BackupRunner:
         if returncode == 0:
             return True, "Backup payload successfully transferred and assembled."
         detail = self._last_error or "see output above"
+        self._roll_back(partial=True)
         return False, f"idevicebackup2 failed with returncode {returncode} ({detail})."
+
+    def _roll_back(self, partial: bool) -> None:
+        """This run didn't produce a good backup: put the previous one back where it was. A half-written
+        backup (partial) is removed; a complete-but-failed one is kept as `<UDID>-failed-<stamp>` to inspect."""
+        if not (self.udid and self._archived and self._archived.is_dir()):
+            return
+        live = self.backup_dir / self.udid
+        try:
+            if live.exists():
+                if partial:
+                    shutil.rmtree(live, ignore_errors=True)
+                else:
+                    os.replace(str(live), str(_free_name(live.parent, f"{live.name}-failed-{archive_stamp(live)}")))
+            os.replace(str(self._archived), str(live))
+            self.log(f"  ↩️  Put the previous backup back ({self._archived.name} -> {live.name}).")
+            self._archived = None
+        except OSError as e:
+            self.log(f"  ⚠️ Couldn't put the previous backup back ({e}). It is safe as: {self._archived.name}")
 
     def _run_pty(self, cmd, env, pty, select) -> int:
         master_fd, slave_fd = pty.openpty()
@@ -501,7 +533,7 @@ class BackupRunner:
     def post_flight_verification(self) -> Tuple[bool, str]:
         """
         Executes backup verification, Keychain check, APFS CoW snapshot,
-        and authoritative catalog pruning.
+        and the backup list with a clean-up proposal.
         """
         self.log("\n-------------------------------------------------------")
         self.log("[*] Executing Post-Flight Autonomous Pipeline...")
@@ -548,27 +580,15 @@ class BackupRunner:
             self.update_status("failed", message=f"clone failed: {e}")
             return False, f"Pre-wipe safety clone failed: {e}"
 
-        # 3. Pruning (only when --authoritative). NEVER touch the -prewipe clone. Only
-        #    remove timestamped Finder archives and legacy *-authoritative folders, and
-        #    only now that the new clone has verified.
-        if self.authoritative and self.udid:
-            self.log("[*] Authoritative flag active: pruning stale archives (keeping -prewipe)...")
-            pruned_count = 0
-            for item in self.backup_dir.glob(f"{self.udid}-*"):
-                name = item.name
-                if name == prewipe_clone.name or name.endswith(PREWIPE_SUFFIX):
-                    continue
-                is_timestamp_archive = bool(re.search(r"-\d{8}-\d{6}$", name))
-                is_legacy_authoritative = name.endswith("-authoritative")
-                if not (is_timestamp_archive or is_legacy_authoritative):
-                    continue
-                try:
-                    shutil.rmtree(item, ignore_errors=True)
-                    pruned_count += 1
-                    self.log(f"      - Pruned stale copy: {name}")
-                except Exception as e:
-                    self.log(f"      ⚠️ Could not prune {name}: {e}")
-            self.log(f"  ✅ Catalog Consolidated:     {pruned_count} stale archive(s) pruned.")
+        # 3. No automatic deleting, ever. The agent lists the backups with their stats and proposes the
+        #    next clean-up move (`restorer.py backups`); the person decides.
+        try:
+            import backup_manager as bm
+            listed, free = bm.list_backups(self.udid), bm.free_gb(self.udid)
+            for ln in bm.describe(listed, bm.propose_moves(listed, free), bm.other_phones(self.udid), free):
+                self.log("  " + ln)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"  (couldn't list the backups: {e})")
 
         # 4. Storage snapshot
         try:
@@ -596,7 +616,7 @@ class BackupRunner:
         self.log("=======================================================")
         self.log("🎉 BACKUP CYCLE COMPLETED SUCCESSFULLY!")
         self.log("=======================================================\n")
-        return True, "Backup cycle completed, verified, and established as authoritative."
+        return True, "Backup cycle completed and verified (the previous backup was kept)."
 
     def execute(self) -> bool:
         """Chains preflight, backup execution, and post-flight verification."""
@@ -617,6 +637,7 @@ class BackupRunner:
         ok, msg = self.post_flight_verification()
         if not ok:
             self.log(f"\n❌ Post-flight verification failed: {msg}")
+            self._roll_back(partial=False)
             self.update_status("failed", error=msg)
             return False
 
@@ -627,7 +648,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Autonomous iPhone Backup Engine with Desktop Chimes.")
     parser.add_argument("--udid", help="Device UDID (defaults to connected device).")
     parser.add_argument("--password", help="Candidate backup decryption password.")
-    parser.add_argument("--authoritative", action="store_true", help="Consolidate as sole authoritative backup (prunes stale snapshots).")
     parser.add_argument("--no-sound", dest="play_audio", action="store_false", help="Disable audio chimes.")
     parser.add_argument("--no-notify", dest="show_notifications", action="store_false", help="Disable macOS notification banners.")
     parser.add_argument("--status-json", type=Path, help="Custom path for .backup_status.json.")
@@ -652,7 +672,6 @@ def main() -> None:
         password=args.password,
         play_audio=args.play_audio,
         show_notifications=args.show_notifications,
-        authoritative=args.authoritative,
         status_file=args.status_json,
         checkin_minutes=args.checkin_minutes,
     )

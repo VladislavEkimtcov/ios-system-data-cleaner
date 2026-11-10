@@ -246,19 +246,35 @@ def describe_backups(backups: List[Dict[str, Any]]) -> List[str]:
 
 
 def choose_source(udid: str, which: str = "auto") -> Optional[Dict[str, Any]]:
-    """`auto` = the newest usable backup, preferring the immutable -prewipe clone on a tie."""
+    """`auto` = the newest usable backup, preferring the immutable -prewipe clone on a tie, EXCEPT that a
+    backup listing far fewer apps than another (e.g. 0 vs 45: taken before the apps had come back after a
+    restore) is skipped: restoring it brings the data back without the App Store apps (seen 2026-11-10).
+    The skipped newer backups are returned in `skipped` so the plan can say what that costs."""
     root = backup_root(udid)
     cands = []
     for kind, p in (("clone", root / f"{udid}{PREWIPE}"), ("live", root / udid)):
         if p.is_dir() and which in ("auto", kind):
             meta = inspect_source(p, udid)
             meta["kind"] = kind
+            meta["app_count"] = backup_facts(p).get("app_count")
             cands.append(meta)
     if not cands:
         return None
     usable = [c for c in cands if not c["problems"]] or cands
     usable.sort(key=lambda c: (c["date"] or datetime.min, c["kind"] == "clone"), reverse=True)
-    return usable[0]
+    skipped: List[Dict[str, Any]] = []
+    if which == "auto":
+        counts = [c["app_count"] for c in usable if c["app_count"] is not None]
+        best = max(counts, default=0)
+        if best >= 5:
+            rich = [c for c in usable if c["app_count"] is not None and c["app_count"] >= best / 2]
+            if rich and rich[0] is not usable[0]:
+                skipped = [c for c in usable if c not in rich]
+                usable = rich
+    chosen = usable[0]
+    chosen["skipped"] = [{"name": c["name"], "kind": c["kind"], "made_text": _when(c["last_backup_date"] or c["date"]),
+                          "app_count": c["app_count"]} for c in skipped]
+    return chosen
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +388,11 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
                        [{"id": "retry", "label": "Tell me when there's more space."}, STOP_OPTION])
 
     warnings: List[str] = []
+    for sk in src.get("skipped") or []:
+        warnings.append(f"A newer backup exists ({sk['made_text']}) but it lists only {sk['app_count']} App Store apps, "
+                        f"and this one lists {src.get('app_count')}. I chose this one so your apps come back; anything "
+                        f"you added to the phone after {_when(src['last_backup_date'] or src['date'])} is not in it "
+                        "(the newer backup is kept).")
     if src["product_type"] and verdict.get("product_type") and src["product_type"] != verdict["product_type"]:
         warnings.append(f"The backup came from a different model ({src['product_type']}); the phone is "
                         f"{verdict['product_type']}. Most things restore fine, but check afterwards.")
@@ -386,6 +407,7 @@ def check_preconditions(udid: Optional[str] = None, source: str = "auto",
             "last_backup_date": src["last_backup_date"].isoformat() if src["last_backup_date"] else None,
             "backup_made_text": _when(src["last_backup_date"] or src["date"]),
             "backup_label": src["label"],
+            "backup_apps": src.get("app_count"),
             "available_backups": available_backups(target, src["path"]),
             "backup_age_hours": round(src["age_hours"], 1) if src["age_hours"] is not None else None,
             "backup_ios": src["product_version"],

@@ -62,7 +62,7 @@ The only reliable, Apple-supported method to reclaim this space is an **Encrypte
 | :--- | :--- |
 | **Mandatory Encrypted Backup** | Rejects unencrypted backups; verifies that Keychain, Wi-Fi passwords, and 2FA tokens are included. |
 | **5-Point Backup Verification** | Checks `Manifest.plist`, `Status.plist`, `Info.plist`, file counts, and disk volume before any erase command. |
-| **APFS Copy-on-Write Clone** | Instantly clones your backup to `${UDID}-prewipe` via `cp -c -R` (zero extra disk space) for an immutable fallback. |
+| **Whole-new backups, APFS clone** | Each backup is a new one (the previous is renamed aside, never overwritten); the verified backup is cloned to `${UDID}-prewipe` (instant, no extra space at first) and older clones are kept. Nothing is deleted automatically: `python3 restorer.py backups` lists them with stats and proposes the next clean-up move. |
 | **Single-Device USB Lock** | Restorer automation aborts if more than one iOS device is plugged in, preventing cross-device misconfigurations. |
 | **eSIM & 2FA Coattail Guard** | Halts at physical device boundaries so you keep eSIMs and authenticate Duo/2FA safely. |
 
@@ -153,7 +153,7 @@ Capabilities exposed to your agent:
 | Command | Action |
 | :--- | :--- |
 | `python3 storage_monitor.py --diff` | Render visual before/after storage bar graphs and household savings ledger. |
-| `python3 backup_runner.py --authoritative` | Autonomous backup engine with sub-second PTY sensory feedback and verification. |
+| `python3 backup_runner.py` | Autonomous backup engine with sub-second PTY sensory feedback and verification. |
 | `python3 backup_runner.py --watch` | Follow a running backup: one line when it needs your passcode, when it starts, a check-in every 5 min (GB copied, %, speed, ETA), and the result. |
 | `python3 backup_verifier.py --connected` | Run 6-point cryptographic backup audit gate and proof-of-password check. |
 | `python3 iphone_manager.py security` | Anti-Pegasus MVT spyware scan and deep heuristic security audit. |
@@ -189,7 +189,7 @@ Capabilities exposed to your agent:
 ### Safety Gates, Backups & Credentials
 | Action | Command |
 | :--- | :--- |
-| **Autonomous Sensory Backup & Verification** | `python3 iphone_manager.py backup --authoritative` |
+| **Autonomous Sensory Backup & Verification** | `python3 iphone_manager.py backup` |
 | **Verify Backup Gate (Must report PASS)** | `python3 iphone_manager.py verify --connected` |
 | **Audit Tokens & Credential Posture** | `python3 iphone_manager.py tokens audit` |
 | **Extract & Seal Pre-Wipe Token Manifest** | `python3 iphone_manager.py tokens extract --out tokens_prewipe.json` |

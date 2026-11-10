@@ -127,11 +127,15 @@ def snapshot_script(window_match: str) -> str:
     '''
 
 
-def click_script(window_match: str, scope: str, cls: str, name: str, exact: bool, nth: int = 1) -> str:
+def click_script(window_match: str, scope: str, cls: str, name: str, exact: bool, nth: int = 1,
+                 locate: bool = False) -> str:
     """Clicks the first enabled element of class `cls` whose name starts with (or equals) `name`
-    in the window ("W") or its sheet ("S")."""
+    in the window ("W") or its sheet ("S"). With `locate=True` it doesn't click: it returns
+    "AT|||x|||y" (the element's centre on screen) so the caller can post a real mouse click."""
     from restorer import _applescript_str
     target = "w" if scope == "W" else "sheet 1 of w"
+    act = ('set p to position of e\n set sz to size of e\n return "AT|||" & ((item 1 of p) + (item 1 of sz) / 2) & "|||" & '
+           '((item 2 of p) + (item 2 of sz) / 2)') if locate else 'click e\n return "CLICKED"'
     if not name:
         test = "true"  # empty name = any element of this class (the pop-up button, a menu item by position)
     else:
@@ -160,8 +164,7 @@ def click_script(window_match: str, scope: str, cls: str, name: str, exact: bool
                                             set en to enabled of e
                                         end try
                                         if en is false then return "DISABLED"
-                                        click e
-                                        return "CLICKED"
+                                        {act}
                                     end if
                                 end if
                             end if
@@ -221,7 +224,26 @@ class FinderDriver:
         return parse_snapshot(_osa(snapshot_script(self._match), timeout=90))
 
     def click(self, scope: str, cls: str, name: str, exact: bool = False, nth: int = 1) -> str:
+        if cls == "pop up button" and sys.platform == "darwin":
+            # Seen live 2026-11-10: a scripted `click` on the backup pop-up opens a menu a script then can't read,
+            # while a real mouse click opens one it can. So locate the pop-up and click it for real.
+            where = _osa(click_script(self._match, scope, cls, name, exact, nth, locate=True))
+            if where.startswith("AT|||"):
+                from restorer import real_click
+                _, x, y = where.split("|||")
+                if real_click(float(x), float(y)):
+                    time.sleep(0.6)   # let the menu open
+                    return "CLICKED"
+                return "NOT_FOUND"
+            return where
         return _osa(click_script(self._match, scope, cls, name, exact, nth))
+
+    def heal(self) -> None:
+        """Restart Finder's device service and reopen the phone (Finder keeps stale backup-pop-up entries after
+        backup folders are renamed or swapped; seen live 2026-11-10), then let the loop look again."""
+        from restorer import restart_finder_services, select_device_in_finder
+        restart_finder_services(timeout_sec=15.0, verbose=False)
+        select_device_in_finder(self.udid)
 
     def escape(self) -> None:
         _osa('tell application "System Events" to key code 53', timeout=10)
@@ -400,6 +422,7 @@ class Run:
         self.backup_verified = False
         self.restore_clicks = 0
         self.last_text = ""
+        self.healed = False
 
     # -- steps --------------------------------------------------------------
 
@@ -419,6 +442,8 @@ class Run:
             out = self._pick_backup(expected, snap)
             if out:
                 return out
+            if not self.backup_verified:
+                return None   # e.g. just healed Finder: look again next tick; never press Continue unverified
         radio = _find(snap, "radio button", "Restore from this backup", "W")
         if radio and radio["value"] not in ("1", "true"):
             if self.driver.click("W", "radio button", "Restore from this backup") != "CLICKED":
@@ -449,6 +474,17 @@ class Run:
                      f"'{res['shown']}'. That matches the backup I checked ({self.plan.get('backup_made_text') or last}).")
             if res.get("name_only"):
                 self.say("Heads up: no capture time was recorded for this backup, so only the phone's name could be matched.")
+            return None
+        if res.get("reason") in ("no_matching_time", "no_entry_for_phone", "menu_not_readable", "cannot_open_menu") and not self.healed \
+                and hasattr(self.driver, "heal"):
+            # Stale pop-up entries are the usual cause: restart Finder's device service once and look again
+            self.healed = True
+            self.say("Finder's backup list looks out of date; restarting Finder's device service and looking again.")
+            try:
+                self.driver.heal()
+            except Exception as exc:  # noqa: BLE001
+                self.say(f"(That didn't work: {exc})")
+            self.welcome_unsettled = 0
             return None
         readings = res.get("readings") or []
         seen = "; ".join(f"'{r.get('label', '').strip()}' shows '{r.get('shown')}'" for r in readings)
@@ -761,8 +797,12 @@ def announce_backups(plan: Dict[str, Any], say: Callable[[str], None] = gates.sa
     say(f"BACKUPS_AVAILABLE: I found {sum(1 for ln in lines if not ln.startswith(' '))} backup(s) of this phone on this Mac.")
     for ln in lines:
         say("    " + ln.strip() if ln.startswith(" ") else "  - " + ln)
+    for w in plan.get("warnings") or []:
+        say("WARNING: " + w)
+    apps = plan.get("backup_apps")
     say(f"RESTORING_FROM: the {plan.get('backup_kind') == 'clone' and 'protected safety copy' or 'main backup'}, your phone's data as of "
-        f"{plan.get('backup_made_text') or plan.get('backup_made')}. Finder lists copies by name, so I will make sure it selects "
+        f"{plan.get('backup_made_text') or plan.get('backup_made')}" + (f" ({apps} App Store apps)" if apps is not None else "") +
+        f". Finder lists copies by name, so I will make sure it selects "
         "one of this phone's copies showing exactly that time (never another phone's).")
     return lines
 

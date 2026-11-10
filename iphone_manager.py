@@ -55,7 +55,6 @@ def cmd_backup(args: argparse.Namespace) -> int:
         password=args.password,
         play_audio=not args.no_sound,
         show_notifications=not args.no_notify,
-        authoritative=args.authoritative,
         verbose=True
     )
     success = runner.execute()
@@ -568,45 +567,6 @@ def cmd_restorer(args: argparse.Namespace) -> int:
             print(f"❌ {e}", file=sys.stderr)
             return 1
 
-    elif action == "stage-finder":
-        ui_info = restorer.detect_finder_setup_view()
-        print(f"Finder Setup View: {json.dumps(ui_info, indent=2)}")
-        # Expected device name, to guard against restoring the wrong backup.
-        expected_name = None
-        try:
-            backup = find_backup_for_target(args.udid)
-            expected_name = backup.device_name if backup else None
-        except Exception:
-            expected_name = None
-        stage_res = restorer.stage_finder_restore_selection(expected_backup_name=expected_name)
-        print(f"Stage Result: {json.dumps(stage_res, indent=2)}")
-        if not stage_res.get("success"):
-            # Refused (not wiped, mismatch, or element missing): nothing was clicked.
-            return 1
-        if getattr(args, "auto_confirm", False):
-            time.sleep(1.0)
-            try:
-                c_res = restorer.auto_confirm_finder_restore_sheet(expected_udid=args.udid)
-                print(f"Auto-Confirm Result: {json.dumps(c_res, indent=2)}")
-            except restorer.RestorerSafetyError as err:
-                print(f"⚠️ Auto-confirm safety abort: {err}", file=sys.stderr)
-                return 1
-        return 0
-
-    elif action == "confirm-sheet":
-        try:
-            c_res = restorer.auto_confirm_finder_restore_sheet(expected_udid=args.udid)
-            print(json.dumps(c_res, indent=2))
-            return 0
-        except restorer.RestorerSafetyError as err:
-            print(f"❌ Safety check rejected: {err}", file=sys.stderr)
-            return 1
-
-    elif action == "monitor":
-        res = restorer.monitor_restore_progress(args.udid)
-        print(json.dumps(res, indent=2))
-        return 0
-
     elif action == "audit":
         data = restorer.audit_post_restore_storage(args.udid)
         print(json.dumps(data, indent=2))
@@ -677,7 +637,6 @@ def main() -> int:
     p_bup = subparsers.add_parser("backup", help="Autonomous iPhone encrypted backup with desktop chimes & verification.")
     p_bup.add_argument("--udid", help="Device UDID (defaults to connected device).")
     p_bup.add_argument("--password", help="Candidate backup decryption password.")
-    p_bup.add_argument("--authoritative", action="store_true", help="Consolidate as sole authoritative backup (prunes stale snapshots).")
     p_bup.add_argument("--no-sound", action="store_true", help="Disable audio chimes.")
     p_bup.add_argument("--no-notify", action="store_true", help="Disable macOS notification banners.")
     p_bup.set_defaults(func=cmd_backup)
@@ -812,16 +771,6 @@ def main() -> int:
     rst_wait.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Device UDID (defaults to TARGET_UDID env or single connected device).")
     rst_wait.add_argument("--timeout", type=int, default=600, help="Timeout in seconds.")
     rst_wait.add_argument("--expect-reset", action="store_true", help="First wait for currently-connected device to disconnect, then wait for reboot.")
-
-    rst_stage = rst_sub.add_parser("stage-finder", help="Detect & stage Finder restore UI selection.")
-    rst_stage.add_argument("--auto-confirm", action="store_true", help="Auto-confirm restore password sheet with safety checks.")
-    rst_stage.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Target device UDID.")
-
-    rst_conf = rst_sub.add_parser("confirm-sheet", help="Safely auto-confirm Finder restore password sheet.")
-    rst_conf.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Target device UDID.")
-
-    rst_mon = rst_sub.add_parser("monitor", help="Monitor restore progress and reboot.")
-    rst_mon.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Device UDID.")
 
     rst_audit = rst_sub.add_parser("audit", help="Audit post-restore device storage.")
     rst_audit.add_argument("--udid", default=os.environ.get("TARGET_UDID"), help="Device UDID.")

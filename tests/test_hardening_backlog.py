@@ -392,11 +392,6 @@ class TestDeviceWindowMatch(unittest.TestCase):
         self.assertIn('wName starts with "Bob\'s \\"Peach\\""', m)
         self.assertIn('wName contains "iPhone"', m)
 
-    def test_scripts_use_the_shared_match(self):
-        text = (REPO_ROOT / "restorer.py").read_text()
-        self.assertNotIn('if wName contains "iPhone" or wName contains "iPad" then', text)
-        self.assertEqual(text.count('.replace("__DEVICE_WINDOW_MATCH__", match)'), 4)
-
 
 class TestBackupProgress(unittest.TestCase):
     """Users (and their agents) hear "started" right away and get periodic check-ins."""

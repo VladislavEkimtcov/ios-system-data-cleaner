@@ -10,7 +10,7 @@
 During early development, extreme caution and manual human stops were necessary. Once the pipeline has been validated end-to-end on a throwaway device, routine automated steps no longer need defensive hesitation.
 
 ### The "Smart Friend" Mandate:
-1. **Automate everything that is technically automatable**: If the host Mac has adequate disk buffer and safety checks pass, **start the backup automatically** (`python3 iphone_manager.py backup --authoritative` or `backup_runner.py`). Do not stop and ask the human to click mundane Finder buttons.
+1. **Automate everything that is technically automatable**: If the host Mac has adequate disk buffer and safety checks pass, **start the backup automatically** (`python3 backup_runner.py`). Do not stop and ask the human to click mundane Finder buttons.
 2. **Sensory Feedback & Reactive Wakeups (The "Silent Nod" Protocol)**:
    - When an insurmountable physical gate occurs (e.g., iPhone screen passcode), ring `Ping.aiff` and dispatch a macOS banner: *"Please enter passcode on iPhone screen"*.
    - The sub-second the passcode is accepted, the backup engine automatically rings `Glass.aiff` and dispatches *"Passcode accepted! Streaming payload..."*.
@@ -119,13 +119,15 @@ Agents operating in this repository must strictly adhere to these 5 golden rules
   **Whenever you need the human to prove they remember the password, the local password helper server is THE way** (see "Proving a password the human isn't sure of"). Never ask for the password in chat, never put it in a command line (`--password`), and don't make them use a bare terminal prompt.
 * If a backup is unencrypted, direct the user to check **"Encrypt local backup"** in Finder and rerun.
 
-### Rule 2: APFS Copy-on-Write Safety Clone
-* Before any hardware wipe is authorized, execute an APFS-clone backup:
-  ```bash
-  cp -ac "$HOME/Library/Application Support/MobileSync/Backup/$UDID" \
-         "$HOME/Library/Application Support/MobileSync/Backup/${UDID}-prewipe"
-  ```
-* On APFS filesystems, this is instantaneous, allocates zero initial extra disk space, and provides an immutable fallback that macOS Finder cannot overwrite during subsequent sync operations.
+### Rule 2: Whole-New Backups and the APFS Safety Clone (nothing is ever overwritten)
+* **Every backup is a whole new backup.** `backup_runner.py` renames the previous backup aside (`${UDID}-<its timestamp>`,
+  an instant rename) before it starts, so a run can never overwrite it. If a run fails or fails verification, the previous
+  backup is put back (a failed one is kept as `${UDID}-failed-<timestamp>`).
+* The runner then makes the APFS safety clone `${UDID}-prewipe` (`make_prewipe_clone`, instant, no extra space at first). A
+  stale clone is **kept** as `${UDID}-prewipe-<its timestamp>` instead of being replaced. This is what protects the good
+  copy when a later backup turns out worse (0 apps, 2026-11-10).
+* This costs disk space over time and **nothing is deleted automatically**: see Rule 4c, where the agent lists the
+  backups with their stats and proposes the next clean-up move.
 
 ### Rule 3: The eSIM Preservation Doctrine
 * Whenever an iPhone contains an active cellular plan, the agent must explicitly warn:
@@ -171,10 +173,11 @@ into it. Silence reads as "it's broken"; a wall of progress bars reads as noise.
 The watcher's lines are written for the user; relay them as they are rather than paraphrasing
 them into longer text.
 
-### Rule 4c: Backup Stats Briefing (print what the script found, every time)
+### Rule 4c: Backup Stats Briefing and Clean-up Proposal (print what the script found, every time)
 The scripts already read the facts about each backup; the agent's job is to **print them in the chat**, not summarise them away.
-Run `python3 restorer.py backups` (read-only; the restore dry run prints the same lines as `BACKUPS_AVAILABLE`) and relay
-every line, including the stats and any `WARNING`:
+Run `python3 restorer.py backups` (read-only; the restore dry run prints the same lines as `BACKUPS_AVAILABLE`, and the
+backup runner prints them when it finishes) and relay every line, including the stats, any `WARNING` and the
+`PROPOSED_NEXT_MOVE`:
 * **When:** (1) right after a backup is verified, before you tell the person to erase the phone; (2) at the restore choice
   (the `ui-restore` dry run), before they say go; (3) any time they ask "which backup is this".
 * **What it shows per backup:** when the phone's data was captured, iOS version, usable or not, **App Store app count**,
@@ -187,7 +190,14 @@ every line, including the stats and any `WARNING`:
   unlock the phone, confirm the apps are on the Home Screen (Apple ID signed in, downloads finished), and take a new
   backup. When restoring, pick the backup with the apps, tell the person what the older one costs (data since then),
   and let them choose.
-* Restore a specific copy with `restorer.py ui-restore --source clone` (the protected safety copy) or `--source live`; add
+* **Backup management (`PROPOSED_NEXT_MOVE`).** Whole-new backups pile up. Show the list, then the proposed move (an exact
+  duplicate, a failed backup, or one superseded by a newer backup with as many apps) and **ask**. Only after a yes run
+  `python3 restorer.py backups --trash <folder>`: it moves that one backup to the Trash (recoverable) and refuses the live
+  backup, the protected safety copy, hand-protected `.protected-*` copies, and the only backup holding the most apps.
+  Never delete anything yourself, never touch another phone's backups (they are listed for information only), and say that
+  copies made by cloning share data, so deleting one may free little until the originals go too.
+* `ui-restore --source auto` already skips a backup that lists far fewer apps than another, and says what that costs
+  (anything newer than the backup it chose). Restore a specific copy with `restorer.py ui-restore --source clone` (the protected safety copy) or `--source live`; add
   `--max-age-hours` if it is older than the default. Finder's pop-up can show stale entries after folders are renamed or
   swapped: `restorer.py heal-finder` and retry (the script refuses to restore unless the time shown matches).
 
@@ -295,10 +305,12 @@ command-line restore (`Could not start service com.apple.mobilebackup2: Invalid 
 Mac activates it itself once the phone is opened in Finder. With the person's OK to use Finder
 for this one step, run `python3 restorer.py activate`: it opens the phone's row in Finder's
 sidebar, waits for `Activated`, then **closes the Finder window it needed** (only windows named
-after the phone). If a scripted click only highlights the row (seen on this Mac), it returns a
-`handoff` with the row's live position: click it with a vision click, or ask the person to click
-the iPhone under Locations. Activation never clicks Continue or any setup choice; `ui-restore` does that
-itself (it also activates an unactivated phone on its own).
+after the phone). It opens a fresh Finder window (so the sidebar layout is predictable and the person's own windows are
+left alone) and clicks the row with a **real mouse click** (`restorer.real_click`; System Events' scripted click only
+highlights a sidebar row, seen 2026-11-10). The row's text can carry a trailing space ("Персик "), which the match
+allows for. Only if even that fails does it return a `handoff` with the row's live position: click it with a vision
+click, or ask the person to click the iPhone under Locations. Activation never clicks Continue or any setup choice;
+`ui-restore` does that itself (it also activates an unactivated phone on its own).
 
 ### Proving a password the human isn't sure of (the password helper page)
 
@@ -329,11 +341,14 @@ look. It is idempotent: it acts on what Finder shows right now, so after any sto
 people's phones included, and several entries share an identical label; the date in a label is the folder's
 own timestamp, not the backup's. So the label is never trusted: the script keeps or selects only an entry
 whose device name matches AND whose "Last Backed Up" line equals the validated backup's capture time
-(Info.plist `Last Backup Date`). Finder preselects a matching entry in the normal case. Scripts can open the
-pop-up but macOS doesn't expose a script-opened menu's entries, so if the preselected entry doesn't match,
-the run stops with `step: choose_backup` before Continue and **you pick the entry**: open the pop-up with a
-real click, select the entry named after the phone, check the "Last Backed Up" line equals the time in the
-handoff, resume. Never pick an entry named after another phone.
+(Info.plist `Last Backup Date`). Finder preselects a matching entry in the normal case. The driver opens the
+pop-up with a **real mouse click** (a scripted click opens a menu whose entries a script can't read; a real click
+opens one it can, seen 2026-11-10), so it can walk the entries itself. If Finder's list looks stale (renamed or
+swapped backup folders leave old entries, so no entry shows the expected time) it restarts Finder's device service
+once (`restorer.py heal-finder` does the same by hand) and looks again before handing off. Only if the entry still
+can't be proven does the run stop with `step: choose_backup` before Continue. **`--source auto` skips a backup that
+lists far fewer apps than another** and prints a `WARNING:` saying what that costs. Never pick an entry named after
+another phone.
 
 **Distinct labels in Finder's pop-up** (`backup_labels.py`): applied automatically, you rarely run it yourself:
 after the safety copy is made (`backup_runner.py`, `iphone_manager.py revive`), at the start of a real `ui-restore`
@@ -341,8 +356,9 @@ after the safety copy is made (`backup_runner.py`, `iphone_manager.py revive`), 
 successful restore (Finder leaves a new timestamped copy). It never blocks a backup or restore if it fails.
 By hand: `python3 backup_labels.py` previews, `--apply` / `--revert` change it. It rewrites each copy's
 `Display Name` (the field Finder's pop-up shows; the phone's real `Device Name` is left alone) into e.g.
-"Яблоко · safety copy · Nov 9, 5:47 PM" / "· main ·" / "· extra copy - Nov 9, 2026 at 8:39 PM" (Finder's own date
-on its copies is kept), keeps the original in `Original Display Name`, saves the old Info.plist under the state
+"Яблоко · safety copy · Nov 9, 5:47 PM" / "· main ·" / "· older safety copy ·" / "· hand-protected copy ·" (Finder lists
+dot-prefixed `.protected-*` folders too) / "· extra copy - Nov 9, 2026 at 8:39 PM" (Finder's own date on its copies is
+kept; rotated-aside backups get their capture time), keeps the original in `Original Display Name`, saves the old Info.plist under the state
 dir, and `--revert` undoes it. It edits only that name, refuses while a restore runs, and never touches other
 phones. The picker then selects the exact label (`plan["backup_label"]`), and handoffs name the entry to click.
 
@@ -388,10 +404,15 @@ Screens it knows: no window (opens the phone from the sidebar), activating, **We
 6. **Handoff (exit 4) is your cue.** The JSON has `step`, what it `seen` on screen (passwords never
    included) and `agent_instructions`. Do exactly that with the computer-use MCP: `request_access` for
    Finder, screenshot the iPhone's Finder window, perform the one fix it names (open the phone from the
-   sidebar, choose the right backup in the pop-up, click Continue, dismiss an OK sheet...), then run
+   sidebar, click Continue, dismiss an OK sheet...), then run
    `python3 restorer.py ui-restore --resume --confirm --hello-confirmed`. A resume mid-restore skips the
    "erased" gate (the phone has left 'Hello') but still requires the same lone phone. Wait for a sheet
    to stop animating before clicking; a click during the slide has missed before.
+   **Limit of the computer-use MCP (seen 2026-11-10):** the backup pop-up's menu belongs to Finder's device helper
+   (`com.apple.amp.devicesui`), which is not in the allowed apps, so your clicks and key presses on that menu are
+   refused. Don't fight it: a real click on the pop-up button opens the menu, and the script then selects the entry
+   itself when you `--resume`. If you killed the script while Finder's password sheet was up, press Cancel on the sheet
+   before re-running.
 7. **Hard no's, even in a handoff:** never click "Restore Backup..." on the Summary page; never click
    anything on a phone that isn't erased; never pick a backup other than the expected one.
 8. **After**: `storage_monitor.py --snap post_restore` and `--diff`, but only after app re-downloads settle.

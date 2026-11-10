@@ -176,6 +176,18 @@ class StateMachine(unittest.TestCase):
         self.assertEqual((code, res["step"]), (4, "choose_backup"))
         self.assertNotIn(("W", "button", "Continue"), drv.clicks)
 
+    def test_stale_backup_list_restarts_finders_device_service_once_before_handing_off(self):
+        run, drv, _, said = make_run([WELCOME, WELCOME, WELCOME, WELCOME, WELCOME, WELCOME])
+        run.plan["last_backup_date"] = "2026-11-09T23:47:00"
+        drv.click_results[("W", "pop up button", "")] = "NOT_FOUND"
+        drv.healed = 0
+        drv.heal = lambda: setattr(drv, "healed", drv.healed + 1)
+        code, res = run.drive(60)
+        self.assertEqual((code, res["step"]), (4, "choose_backup"))   # still can't prove it: hands off
+        self.assertEqual(drv.healed, 1)                                 # ...but only after ONE heal
+        self.assertNotIn(("W", "button", "Continue"), drv.clicks)       # and never pressed Continue unverified
+        self.assertTrue(any("out of date" in m for m in said))
+
     def test_wrong_password_is_dismissed_and_watched_and_restore_continues(self):
         run, drv, notes, _ = make_run([PW_EMPTY, PW_TYPED, WRONG_PW, PW_EMPTY, PW_TYPED, RESTORING, SUMMARY],
                                       launch_helper=mock.Mock(return_value=None))

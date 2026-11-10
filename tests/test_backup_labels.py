@@ -62,7 +62,7 @@ class Labeler(unittest.TestCase):
         n = self.names()
         self.assertTrue(n[UDID].startswith("Яблоко · main · Nov 9, "))
         self.assertTrue(n[f"{UDID}-prewipe"].startswith("Яблоко · safety copy · Nov 9, "))
-        self.assertEqual(n[f"{UDID}-20261109-203901"], "Яблоко · extra copy")   # no Finder date in this fixture
+        self.assertTrue(n[f"{UDID}-20261109-203901"].startswith("Яблоко · extra copy · Nov 9, "))   # no Finder date: say when it was made
         self.assertNotEqual(n[UDID], n[f"{UDID}-prewipe"])
 
     def test_only_the_label_changes_and_the_real_name_is_kept(self):
@@ -214,7 +214,8 @@ class PickerWithLabels(unittest.TestCase):
                 return "CLICKED"
 
         f = F()
-        expected = datetime(2026, 11, 9, 17, 47).astimezone().astimezone(timezone.utc).replace(tzinfo=None)
+        # "Today, 5:47 PM" is read relative to the real clock, so build the expected time from today's date
+        expected = datetime.now().replace(hour=17, minute=47, second=0, microsecond=0).astimezone().astimezone(timezone.utc).replace(tzinfo=None)
         res = bp.choose_backup(f, "Яблоко", expected, lambda s: None, expected_label=label)
         self.assertTrue(res["ok"], res)
         self.assertEqual(f.current, 1)

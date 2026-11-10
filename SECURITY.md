@@ -46,21 +46,25 @@ describes exactly what the tooling does — and does not — do.
 Before any erase/restore, the verified backup is cloned to `${UDID}-prewipe` by one shared
 helper that:
 - clones to a temporary sibling, verifies the plists and a non-empty `Manifest.db`, then
-  **atomically swaps** it into place;
+  **atomically swaps** it into place; the clone it replaces is **kept** as
+  `${UDID}-prewipe-<timestamp>`, never overwritten or deleted;
 - is **idempotent and never nested** — if a valid clone already exists it is kept as-is;
 - uses APFS copy-on-write (`cp -c`) on macOS, `robocopy` on Windows (exit code < 8 = success),
   or a plain recursive copy elsewhere after a free-space check.
 
-Pruning of stale backups (under `backup --authoritative`) only removes timestamped Finder
-archives and legacy `-authoritative` folders, **never the `-prewipe` clone**, and only after
-the new clone has verified.
+Backups are never overwritten and never pruned automatically: each backup run renames the
+previous one aside first (and puts it back if the run fails). Clean-up is proposed by
+`python3 restorer.py backups` and only happens when the person says yes: it moves one backup to
+the Trash and refuses the live backup, the `-prewipe` clone, hand-protected `.protected-*`
+copies, another phone's backups, and the only backup holding the most apps.
 
 ### 4. Single-device & post-wipe guardrails
 - Finder/iTunes restore automation aborts unless exactly one iOS device is connected and its
   UDID matches the expected target.
-- Finder staging only acts in the post-wipe Welcome/Set-Up view and aborts if the selected
-  backup does not match the expected device; auto-confirm additionally requires the `-prewipe`
-  clone to exist. There is no "Restore Backup…" path that could overwrite a live device.
+- The Finder restore (`restorer.py ui-restore`) only acts in the post-wipe Welcome view, proves
+  the selected backup matches the validated one by name and capture time before pressing
+  Continue, and refuses a set-up phone. There is no "Restore Backup…" path that could
+  overwrite a live device.
 - Windows restore refuses unless the device is confirmed wiped; no fixed-coordinate clicks are
   used — unresolved UI elements produce a structured "agent handoff" instead of a blind click.
 
