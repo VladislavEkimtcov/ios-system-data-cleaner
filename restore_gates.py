@@ -14,6 +14,7 @@ Refusals are plain-language dicts: {"ok": False, "code", "message", "options": [
 
 from __future__ import annotations
 
+import os
 import plistlib
 import re
 import shutil
@@ -140,6 +141,57 @@ def _when(dt_utc_naive: Optional[datetime]) -> str:
     return d.strftime("%b ") + str(d.day) + d.strftime(", %I:%M %p").replace(" 0", " ")
 
 
+def backup_facts(path: Path) -> Dict[str, Any]:
+    """Cheap, read-only stats about one backup folder, for the chat: how many App Store apps it lists,
+    which 2FA / password-manager apps are among them, how big the Keychain is, and the size on disk.
+    (A backup taken before the apps came back after a restore lists 0 apps: restoring it brings back
+    the data but none of the App Store apps. That is what these numbers are here to catch.)"""
+    facts: Dict[str, Any] = {"app_count": None, "auth_apps": [], "keychain_items": None, "size_gb": None}
+    info = _read_plist(path / "Info.plist")
+    apps = info.get("Applications")
+    if isinstance(apps, dict):
+        facts["app_count"] = len(apps)
+        try:
+            from token_extractor import KNOWN_AUTH_BUNDLES
+            found = sorted({KNOWN_AUTH_BUNDLES[b] for b in apps if b in KNOWN_AUTH_BUNDLES})
+        except Exception:  # noqa: BLE001
+            found = []
+        facts["auth_apps"] = found
+    try:
+        from token_extractor import extract_keychain_artifact
+        kc = extract_keychain_artifact(path)
+        if kc.present:
+            facts["keychain_items"] = kc.estimated_items
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        total = 0
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.lstat(os.path.join(root, f)).st_size
+                except OSError:
+                    pass
+        facts["size_gb"] = round(total / 1e9, 2)
+    except OSError:
+        pass
+    return facts
+
+
+def _facts_line(f: Dict[str, Any]) -> str:
+    bits = []
+    bits.append(f"{f['app_count']} App Store apps" if f.get("app_count") is not None else "app list unreadable")
+    if f.get("auth_apps"):
+        bits.append("2FA/password apps: " + ", ".join(f["auth_apps"]))
+    else:
+        bits.append("no 2FA/password-manager apps listed")
+    if f.get("keychain_items") is not None:
+        bits.append(f"Keychain ~{f['keychain_items']:,} items")
+    if f.get("size_gb") is not None:
+        bits.append(f"{f['size_gb']} GB on disk")
+    return ", ".join(bits)
+
+
 def available_backups(udid: str, chosen: Optional[Path] = None) -> List[Dict[str, Any]]:
     """Every backup folder on this Mac that belongs to this phone, in plain terms, with the one that
     will be restored marked. Finder's own timestamped working copies are listed too."""
@@ -167,18 +219,29 @@ def available_backups(udid: str, chosen: Optional[Path] = None) -> List[Dict[str
             "made_text": _when(meta["last_backup_date"] or meta["date"]),
             "ios": meta["product_version"], "device_name": meta["device_name"].strip(),
             "usable": not meta["problems"], "problems": meta["problems"],
+            "facts": backup_facts(p),
             "chosen": bool(chosen and p.resolve() == Path(chosen).resolve()),
         })
     return out
 
 
 def describe_backups(backups: List[Dict[str, Any]]) -> List[str]:
-    """Plain-language lines for the chat: what exists, and which one is being restored."""
+    """Plain-language lines for the chat: what exists, its stats, and which one is being restored.
+    The agent relays ALL of these lines (including the stats and any WARNING) to the person."""
     lines = []
+    counts = [(b["facts"]["app_count"], b) for b in backups if b.get("facts") and b["facts"].get("app_count") is not None]
+    best = max(counts, key=lambda t: t[0], default=(0, None))
     for b in backups:
         state = "usable" if b["usable"] else "not usable: " + "; ".join(b["problems"])
         mark = "  <-- RESTORING THIS ONE" if b["chosen"] else ""
         lines.append(f"{b['label']}: your phone's data as of {b['made_text']}, iOS {b['ios'] or '?'}, {state}{mark}")
+        f = b.get("facts")
+        if f:
+            lines.append("      " + _facts_line(f))
+            n = f.get("app_count")
+            if n is not None and best[1] is not None and best[0] >= 5 and n < best[0] / 2:
+                lines.append(f"      WARNING: only {n} apps listed, but the {best[1]['label']} lists {best[0]}. Restoring this one "
+                             "would likely bring the data back WITHOUT most of the App Store apps.")
     return lines
 
 

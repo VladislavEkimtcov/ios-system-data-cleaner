@@ -59,29 +59,78 @@ PRODUCT_TYPE_MAP = {
     "iPhone17,2": "iPhone 16 Pro Max",
     "iPhone17,3": "iPhone 16",
     "iPhone17,4": "iPhone 16 Plus",
+    "iPhone17,5": "iPhone 16e",
+    "iPhone18,1": "iPhone 17 Pro",
+    "iPhone18,2": "iPhone 17 Pro Max",
+    "iPhone18,3": "iPhone 17",
+    "iPhone18,4": "iPhone Air",
 }
 
-# Baseline default fallbacks when no live quotes are present
-HEURISTIC_FALLBACKS: Dict[str, Dict[str, Any]] = {
-    "iPhone10,4": {
-        "friendly_name": "iPhone 8",
-        "refurb_replacement_usd": 75.0,
-        "retail_upgrade_usd": 799.0,
-        "source": "Market Heuristic (Fallback)",
-    },
-    "iPhone12,8": {
-        "friendly_name": "iPhone SE (2nd generation)",
-        "refurb_replacement_usd": 95.0,
-        "retail_upgrade_usd": 799.0,
-        "source": "Market Heuristic (Fallback)",
-    },
-    "iPhone13,1": {
-        "friendly_name": "iPhone 12 mini",
-        "refurb_replacement_usd": 155.0,
-        "retail_upgrade_usd": 799.0,
-        "source": "Market Heuristic (Fallback)",
-    },
+# Researched best estimates (USD, US market, unlocked, "Good" condition, typical 128 GB unless the model
+# started at 64 GB), pulled 2026-11-10 from Back Market, Swappa, eBay, Walmart and Apple's refurbished store
+# price pages. Format: friendly name -> (refurbished replacement cost, new price at launch, basis).
+# "basis": "listed" = read from a listing or price guide, "range" = midpoint of a range seen, "interp" = no
+# direct figure found, interpolated from the neighbouring models. These are estimates, meant to be a
+# fair reward figure rather than a quote: a live quote recorded with `market_pricing.py set` always wins.
+ESTIMATES_AS_OF = "2026-11"
+BEST_ESTIMATES: Dict[str, Tuple[float, float, str]] = {
+    "iPhone 8":                    (100.0,  699.0, "range"),   # Back Market $57-124, eBay US $115
+    "iPhone 8 Plus":               (120.0,  799.0, "listed"),  # Back Market from $99.99, UpTrade $119
+    "iPhone X":                    (130.0,  999.0, "interp"),
+    "iPhone XR":                   (125.0,  749.0, "listed"),  # RefurbMe/Back Market $125, range $99-167
+    "iPhone XS":                   (143.0,  999.0, "listed"),  # RefurbMe/Back Market 64 GB
+    "iPhone XS Max":               (165.0, 1099.0, "interp"),
+    "iPhone 11":                   (150.0,  699.0, "range"),   # $124-161
+    "iPhone 11 Pro":               (190.0,  999.0, "range"),   # Back Market $130-252
+    "iPhone 11 Pro Max":           (215.0, 1099.0, "interp"),
+    "iPhone SE (2nd generation)":  (100.0,  399.0, "range"),   # Back Market from $91.70, Walmart $99-154
+    "iPhone SE (3rd generation)":  (140.0,  429.0, "listed"),  # Walmart B+ 64 GB $110, typical grade B ~$140
+    "iPhone 12 mini":              (160.0,  699.0, "interp"),
+    "iPhone 12":                   (165.0,  799.0, "listed"),  # eBay Refurbished $164
+    "iPhone 12 Pro":               (270.0,  999.0, "listed"),  # Back Market from $274
+    "iPhone 12 Pro Max":           (330.0, 1099.0, "interp"),
+    "iPhone 13 mini":              (225.0,  699.0, "listed"),  # Back Market $223, Walmart $212, 9to5Mac ~$230
+    "iPhone 13":                   (235.0,  799.0, "range"),   # $200-234; Swappa $245-347
+    "iPhone 13 Pro":               (340.0,  999.0, "interp"),
+    "iPhone 13 Pro Max":           (410.0, 1099.0, "listed"),  # Back Market from $410
+    "iPhone 14":                   (285.0,  799.0, "listed"),  # Swappa 128 GB ~$283, Back Market $283
+    "iPhone 14 Plus":              (310.0,  899.0, "interp"),
+    "iPhone 14 Pro":               (378.0,  999.0, "listed"),  # Back Market unlocked $378
+    "iPhone 14 Pro Max":           (463.0, 1099.0, "listed"),  # Back Market from $463.20
+    "iPhone 15":                   (390.0,  799.0, "listed"),  # Back Market $396-399, Swappa 128 GB ~$387
+    "iPhone 15 Plus":              (385.0,  899.0, "range"),   # $379-394
+    "iPhone 15 Pro":               (490.0,  999.0, "range"),   # $468-509
+    "iPhone 15 Pro Max":           (560.0, 1199.0, "range"),   # $534-585
+    "iPhone 16":                   (565.0,  799.0, "listed"),  # Back Market $557-576, Swappa $530-685
+    "iPhone 16 Plus":              (640.0,  899.0, "interp"),  # Apple refurb $699 scaled to market
+    "iPhone 16 Pro":               (700.0,  999.0, "interp"),  # Apple refurb from $759
+    "iPhone 16 Pro Max":           (790.0, 1199.0, "listed"),  # Amazon Renewed from $792, Apple refurb $929
+    "iPhone 16e":                  (375.0,  599.0, "listed"),  # Swappa July 2026 128 GB $375
+    "iPhone 17":                   (810.0,  799.0, "range"),   # Swappa $734-887
+    "iPhone Air":                  (704.0,  999.0, "listed"),  # Swappa Sept 23 2026 256 GB
+    "iPhone 17 Pro":               (912.0, 1099.0, "listed"),  # Swappa Oct 7 2026 256 GB
+    "iPhone 17 Pro Max":          (1020.0, 1199.0, "listed"),  # Swappa 256 GB ~$1,020
 }
+
+
+def _build_fallbacks() -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for model_id, name in PRODUCT_TYPE_MAP.items():
+        est = BEST_ESTIMATES.get(name)
+        if not est:
+            continue
+        refurb, retail, basis = est
+        out[model_id] = {
+            "friendly_name": name,
+            "refurb_replacement_usd": refurb,
+            "retail_upgrade_usd": retail,
+            "source": f"Researched estimate {ESTIMATES_AS_OF} ({basis}; Back Market/Swappa/eBay listings)",
+        }
+    return out
+
+
+# Baseline fallbacks when no live quote has been recorded: the researched estimates above.
+HEURISTIC_FALLBACKS: Dict[str, Dict[str, Any]] = _build_fallbacks()
 
 DEFAULT_STALE_DAYS = 14
 

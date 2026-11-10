@@ -859,6 +859,10 @@ def main() -> int:
     p_act.add_argument("--udid", default=default_udid, help="Target device UDID")
     p_act.add_argument("--timeout", type=int, default=180, help="Seconds to wait for activation")
 
+    p_bk = subparsers.add_parser("backups", help="List every backup of this phone on this Mac with its stats "
+                                                  "(when taken, app count, 2FA apps, Keychain, size). Read-only.")
+    p_bk.add_argument("--udid", default=default_udid, help="Target device UDID")
+
     # Subcommand: ui-restore (THE restore: deterministic Finder UI driving, agent handoff on trouble)
     subparsers.add_parser("ui-restore", help="Restore by driving Finder deterministically (hands off to the agent when stuck). "
                                              "Same flags as finder_restore.py; run it with --help", add_help=False)
@@ -879,6 +883,17 @@ def main() -> int:
         except TimeoutError as e:
             print(f"[!] {e}")
             return 1
+    elif args.command == "backups":
+        import restore_gates
+        u = args.udid or (get_connected_udids() or [None])[0]
+        if not u:
+            print("[!] No phone connected.")
+            return 2
+        lines = restore_gates.describe_backups(restore_gates.available_backups(u))
+        print(f"BACKUPS_AVAILABLE: {sum(1 for l in lines if not l.startswith(' '))} backup(s) of this phone on this Mac.")
+        for ln in lines:
+            print("  - " + ln if not ln.startswith(" ") else "    " + ln.strip())
+        return 0
     elif args.command == "activate":
         u = args.udid or (get_connected_udids() or [None])[0]
         if not u:

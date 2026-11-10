@@ -1,5 +1,29 @@
 # TODO
 
+## macOS status (2026-11-10)
+
+The macOS path works end to end on the iPhone 8: backup -> verify + password proof -> safety copy -> erase ->
+activate -> Finder UI restore -> post-restore audit and ROI report. Open macOS items, in priority order:
+
+- [ ] **Guard the safety-copy refresh (bit us 2026-11-10).** `make_prewipe_clone` replaces the older good `-prewipe`
+      with each new backup, so a backup of a phone whose apps hadn't re-downloaded (0 apps) overwrote the good
+      copy; only the hand-made `.protected-...-golden` copy saved the apps. Never replace a clone with a backup
+      that lists far fewer apps (use `restore_gates.backup_facts`), and keep one previous generation.
+- [ ] **Gate the erase on the app count.** Refuse the erase (or demand an explicit OK) when the new backup lists 0 or
+      far fewer apps than the earlier good one. Today this is only a printed WARNING plus agent rules (AGENTS.md 4c).
+- [ ] Pre-erase question and post-restore check for Apple ID sign-in (see the 2026-11-09 item below).
+- [ ] Finder's backup pop-up shows stale entries after folders are renamed or swapped: `heal-finder` was needed, and
+      a script-opened pop-up still can't be read (needs a real click, which hands off to the agent).
+      Consider cleaning the hidden `.protected-*` / extra copies out of Finder's list, or a scripted real click.
+- [ ] After a Finder restart the phone page may not open by itself (handoff "highlighted the phone but didn't open it").
+- [ ] Activation: the scripted sidebar click only highlights the row; the agent clicks (works, needs Finder access).
+- [ ] Untested live: wrong password + helper offer, empty password box.
+- [ ] Failure paths on a real phone: unplug mid-backup/restore, locked phone, small disk buffer.
+- [ ] Verify eSIM, 2FA tokens and keychain after a restore (`token_extractor.py verify`).
+- [ ] `tests/test_backup_labels.py::PickerWithLabels::test_exact_label_is_chosen_among_a_phones_entries` fails (pre-existing, unrelated).
+- [ ] Retire old helpers (`stage-finder`, `confirm-sheet`, `monitor-restore`) and positional AX paths (sections A2-A3).
+- [ ] Low priority: why the old CLI restore booted empty (likely the same 0-apps cause was NOT what happened then: that backup had 45 apps).
+
 ## Next session: run the FULL cycle on the iPhone 8
 
 - [x] **UI restore proven on a real phone (user-confirmed 2026-11-10):** the 2026-11-09 23:00 run restored the iPhone 8
@@ -184,7 +208,7 @@ with a trailing space in the device name, and `status` misreporting a restored p
 The first end-to-end run (erase -> activate via Finder -> `cli-restore` -> restarted as
 "Яблоко", activated, SetupState RestoredFromiTunesBackup) worked. Still to do:
 
-- [ ] **Apps missing after restore (reported by the user, investigate first).** Facts so far: the
+- [x] **RESOLVED 2026-11-10: apps missing after restore.** Root cause: the backup itself listed 0 apps (taken right after a restore, before the App Store apps had re-downloaded), so restoring it brought the data back with no apps. Restoring the older backup that lists 45 apps fixed it. Guard: `restorer.py backups` + AGENTS.md Rule 4c. Older notes follow. Facts so far: the
       backup holds 45 installed apps in Info.plist and ~866 app domains in Manifest.plist; the
       phone's data used (~8 GB) matches the backup's ~9.8 GB, so the app *data* came back. App
       binaries are not in a backup: iOS re-downloads them after the person signs in to their

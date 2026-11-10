@@ -758,9 +758,9 @@ def announce_backups(plan: Dict[str, Any], say: Callable[[str], None] = gates.sa
     """ALWAYS shown before a restore (dry run and real run): every backup of this phone on this Mac and
     which one will be restored. The agent must relay these lines to the person in chat and get their go-ahead."""
     lines = gates.describe_backups(plan.get("available_backups") or [])
-    say(f"BACKUPS_AVAILABLE: I found {len(lines)} backup(s) of this phone on this Mac.")
+    say(f"BACKUPS_AVAILABLE: I found {sum(1 for ln in lines if not ln.startswith(' '))} backup(s) of this phone on this Mac.")
     for ln in lines:
-        say("  - " + ln)
+        say("    " + ln.strip() if ln.startswith(" ") else "  - " + ln)
     say(f"RESTORING_FROM: the {plan.get('backup_kind') == 'clone' and 'protected safety copy' or 'main backup'}, your phone's data as of "
         f"{plan.get('backup_made_text') or plan.get('backup_made')}. Finder lists copies by name, so I will make sure it selects "
         "one of this phone's copies showing exactly that time (never another phone's).")

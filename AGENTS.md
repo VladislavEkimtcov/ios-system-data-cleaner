@@ -171,6 +171,26 @@ into it. Silence reads as "it's broken"; a wall of progress bars reads as noise.
 The watcher's lines are written for the user; relay them as they are rather than paraphrasing
 them into longer text.
 
+### Rule 4c: Backup Stats Briefing (print what the script found, every time)
+The scripts already read the facts about each backup; the agent's job is to **print them in the chat**, not summarise them away.
+Run `python3 restorer.py backups` (read-only; the restore dry run prints the same lines as `BACKUPS_AVAILABLE`) and relay
+every line, including the stats and any `WARNING`:
+* **When:** (1) right after a backup is verified, before you tell the person to erase the phone; (2) at the restore choice
+  (the `ui-restore` dry run), before they say go; (3) any time they ask "which backup is this".
+* **What it shows per backup:** when the phone's data was captured, iOS version, usable or not, **App Store app count**,
+  **2FA / password-manager apps found** (Duo, Authenticator, Authy, Okta, 1Password, Bitwarden...), Keychain size
+  (~items), size on disk. Encrypted 2FA accounts can't be decoded from an encrypted backup, so "2FA apps present" is the
+  honest signal; `token_extractor.py audit --compact` gives the full keychain / keybag / escrow report on request.
+* **A backup with far fewer apps than another (e.g. 0 vs 45) is a trap.** Happened 2026-11-10: a backup taken right after a
+  restore, before the App Store apps had re-downloaded, listed 0 apps, and restoring it brought the data back with no
+  App Store apps. If the new backup lists 0 or a lot fewer apps than the phone really has, do NOT erase: have the person
+  unlock the phone, confirm the apps are on the Home Screen (Apple ID signed in, downloads finished), and take a new
+  backup. When restoring, pick the backup with the apps, tell the person what the older one costs (data since then),
+  and let them choose.
+* Restore a specific copy with `restorer.py ui-restore --source clone` (the protected safety copy) or `--source live`; add
+  `--max-age-hours` if it is older than the default. Finder's pop-up can show stale entries after folders are renamed or
+  swapped: `restorer.py heal-finder` and retry (the script refuses to restore unless the time shown matches).
+
 ### Rule 5: Quantifiable Economic ROI Delivery & The Live Market Valuation Protocol
 * Every revival must finish by capturing a `post_restore` snapshot and rendering the comparative ROI report:
   ```bash
