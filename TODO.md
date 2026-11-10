@@ -1,6 +1,19 @@
 # TODO
 
-## Next, immediate: prove the UI restore on a real Welcome screen
+## Next session: run the FULL cycle on the iPhone 8
+
+- [x] **UI restore proven on a real phone (user-confirmed 2026-11-10):** the 2026-11-09 23:00 run restored the iPhone 8
+      and the user checked the phone: apps and data are back. (Welcome -> backup picked by name + "Last Backed Up"
+      time -> Continue -> Keychain-filled password -> Restore -> done when the transfer process exited, the phone
+      restarted and reported RestoredFromiTunesBackup.)
+- [x] **Full cycle, starting from a clean state (done 2026-11-10, iPhone 8, macOS path complete)** (set up 2026-11-10: caches and stale run status cleared; only the
+      main backup of the phone is on disk, data from 2026-11-09 5:47 PM, labelled "... · main · ..."; the safety
+      copy and Finder's extra copies were moved to the Trash): fresh backup -> verify + password proof -> safety
+      copy (+ labels hook) -> erase on the phone (say: skip the iCloud backup; the screen may be slow) -> wait for
+      Hello -> `ui-restore` dry run (relay the backups list) -> restore -> post-restore audit. Then exercise the
+      untested paths if they come up: empty password box, wrong password + helper offer, the script-opened menu.
+
+## Earlier: prove the UI restore on a real Welcome screen (done)
 
 **Done 2026-11-09/10:** the CLI restore is gone (`cli_restore.py` and its tests deleted; `restorer.py
 cli-restore` removed). The restore is now `restorer.py ui-restore` (`finder_restore.py`): a deterministic
