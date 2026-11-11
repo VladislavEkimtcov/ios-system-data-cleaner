@@ -58,6 +58,8 @@ def label_for(kind: str, base: str, made: Optional[datetime]) -> str:
         return f"{base}{SEP}older safety copy{SEP}{_when(made)}"
     if kind == "protected":
         return f"{base}{SEP}hand-protected copy{SEP}{_when(made)}"
+    if kind == "unfinished":
+        return f"{base}{SEP}unfinished, don't use{SEP}{_when(made)}"
     return f"{base}{SEP}extra copy"
 
 
@@ -134,6 +136,8 @@ def plan(udid: str) -> List[Dict[str, Any]]:
         info_path = p / "Info.plist"
         if not kind or not info_path.is_file():
             continue
+        if kind != "main" and (re.search(r"-failed-\d{8}-\d{6}", p.name, re.I) or not (p / "Manifest.plist").is_file()):
+            kind = "unfinished"     # a failed/stopped run: say so in the pop-up instead of "extra copy"
         info = _read(info_path)
         owner = str(info.get("Unique Identifier") or info.get("Target Identifier") or "")
         if owner and owner.lower() != udid.lower():

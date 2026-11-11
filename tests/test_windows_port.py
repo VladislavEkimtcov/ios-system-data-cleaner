@@ -26,6 +26,75 @@ def _runner(tmp: str) -> "backup_runner.BackupRunner":
                                       play_audio=False, show_notifications=False, verbose=False)
 
 
+class TestInferHandshake(unittest.TestCase):
+    """2026-11-11: through a pipe the passcode prompt only arrived when idevicebackup2 exited, so the
+    Windows watcher infers it from the clock, and the passcode's acceptance from the folder growing."""
+
+    def _run(self, sizes):
+        import threading
+        r = _runner(tempfile.mkdtemp())
+        it = iter(sizes)
+        last = [0]
+
+        def size():
+            last[0] = next(it, last[0])
+            return last[0]
+        r._backup_bytes = size  # type: ignore[method-assign]
+        stop = threading.Event()
+        with mock.patch.object(backup_runner, "INFER_TICK_SEC", 0.01), \
+                mock.patch.object(backup_runner, "PASSCODE_INFER_SEC", 0.03):
+            t = threading.Thread(target=r._infer_handshake, args=(stop,))
+            t.start()
+            t.join(1.0)
+            stop.set()
+            t.join(1.0)
+        return r
+
+    def test_silence_means_passcode_then_growth_means_streaming(self):
+        mb = 1024 * 1024
+        r = self._run([4096] * 6 + [4096 + 25 * mb])
+        self.assertTrue(r.passcode_requested)
+        self.assertTrue(r.handshake_confirmed)
+        self.assertEqual(r._status.get("phase"), "streaming")
+
+    def test_no_growth_stays_waiting_for_passcode(self):
+        r = self._run([4096] * 200)
+        self.assertTrue(r.passcode_requested)
+        self.assertFalse(r.handshake_confirmed)
+        self.assertEqual(r._status.get("phase"), "waiting_passcode")
+
+    def test_real_prompt_line_is_not_announced_twice(self):
+        r = _runner(tempfile.mkdtemp())
+        with mock.patch.object(r, "notify") as n:
+            r._process_line("Waiting for passcode to be entered on the device")
+            r._announce_passcode()
+        self.assertEqual(n.call_count, 1)
+
+
+class TestFirstBackupRollBack(unittest.TestCase):
+    """2026-11-11: a first backup (nothing to put back) that stopped at the passcode stayed as the main backup."""
+
+    def test_unfinished_first_backup_is_moved_aside_as_failed(self):
+        tmp = tempfile.mkdtemp()
+        r = _runner(tmp)
+        live = Path(tmp) / "U1"
+        live.mkdir()
+        (live / "Info.plist").write_bytes(b"<plist/>")
+        r._archived = None
+        r._roll_back(partial=True)
+        self.assertFalse(live.exists())
+        left = [p.name for p in Path(tmp).iterdir() if p.is_dir()]
+        self.assertEqual(len(left), 1)
+        self.assertRegex(left[0], r"^U1-failed-\d{8}-\d{6}")
+
+    def test_nothing_there_is_a_noop(self):
+        tmp = tempfile.mkdtemp()
+        r = _runner(tmp)
+        r._archived = None
+        r._roll_back(partial=True)
+        self.assertEqual([p for p in Path(tmp).iterdir() if p.is_dir()], [])
+
+
 class TestPipeReader(unittest.TestCase):
     """WB2: the Windows pipe reader reads bytes, decodes UTF-8 and splits on CR as well as LF."""
 

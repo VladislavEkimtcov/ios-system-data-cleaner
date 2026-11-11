@@ -162,6 +162,21 @@ class ListAndPropose(unittest.TestCase):
         make_backup(self.root, f"{UDID}-failed-20261110-090000", apps=0, age_hours=1, manifest=b"c" * 30)
         self.assertEqual(bm.propose_moves(bm.list_backups(UDID))[0]["folder"], f"{UDID}-failed-20261110-090000")
 
+    def test_an_unfinished_backup_is_proposed(self):
+        # 2026-11-11: a run that stopped at the passcode left Info.plist only (0 GB); it was never proposed
+        make_backup(self.root, UDID, apps=45, age_hours=1, manifest=b"b" * 30)
+        stopped = make_backup(self.root, f"{UDID}-20261111-104559", apps=45, age_hours=5)
+        for f in ("Manifest.plist", "Manifest.db", "Status.plist"):
+            (stopped / f).unlink()
+        moves = bm.propose_moves(bm.list_backups(UDID))
+        self.assertEqual([m["folder"] for m in moves], [f"{UDID}-20261111-104559"])
+        self.assertIn("unfinished", moves[0]["why"])
+
+    def test_an_unfinished_main_backup_is_never_proposed(self):
+        stopped = make_backup(self.root, UDID, apps=45, age_hours=1)
+        (stopped / "Manifest.plist").unlink()
+        self.assertEqual(bm.propose_moves(bm.list_backups(UDID)), [])
+
     def test_describe_warns_about_app_less_backups_and_names_the_next_move(self):
         data = b"same" * 20
         make_backup(self.root, UDID, apps=0, age_hours=1, manifest=data)

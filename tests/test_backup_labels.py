@@ -32,6 +32,7 @@ def write_info(folder: Path, udid=UDID, name="Яблоко ", extra=None):
          "Product Version": "16.7.16", "Applications": {"com.x": {"PlaceholderIcon": b"\x89PNG\x00\x01"}}}
     d.update(extra or {})
     (folder / "Info.plist").write_bytes(plistlib.dumps(d))   # XML, like the real ones
+    (folder / "Manifest.plist").write_bytes(plistlib.dumps({"IsEncrypted": True}))   # a finished backup has one
     return folder / "Info.plist"
 
 
@@ -105,9 +106,20 @@ class Labeler(unittest.TestCase):
         d = plistlib.loads((self.root / f"{UDID}-20261109-210000" / "Info.plist").read_bytes())
         self.assertEqual(d["Original Display Name"], "Tom & Jerry <phone>")
 
+    def test_unfinished_and_failed_copies_are_labelled_dont_use(self):
+        # 2026-11-11: a run that stopped at the passcode left Info.plist only; iTunes listed it as "extra copy"
+        stopped = write_info(self.root / f"{UDID}-20261111-104559")
+        (stopped.parent / "Manifest.plist").unlink()
+        failed = write_info(self.root / f"{UDID}-failed-20261111-104559")
+        bl.apply(UDID, dry_run=False)
+        for p in (stopped, failed):
+            self.assertIn("unfinished, don't use", plistlib.loads(p.read_bytes())["Display Name"])
+        self.assertTrue(self.names()[UDID].startswith("Яблоко · main · "))
+
     def test_binary_plists_from_finder_are_relabelled_and_stay_binary(self):
         folder = self.root / f"{UDID}-20261109-220000"
         folder.mkdir()
+        (folder / "Manifest.plist").write_bytes(plistlib.dumps({"IsEncrypted": True}))
         (folder / "Info.plist").write_bytes(plistlib.dumps(
             {"Unique Identifier": UDID, "Device Name": "Яблоко ", "Product Version": "16.7.16"}, fmt=plistlib.FMT_BINARY))
         bl.apply(UDID, dry_run=False)

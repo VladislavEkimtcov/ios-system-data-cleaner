@@ -65,6 +65,21 @@ functions change and how behaviour changes. "Unverified" marks a guess that must
 
 ### HANDOFF: second Windows run (read this first)
 
+**Update 2026-11-11, evening: second full cycle DONE** (backup 9.78 GB / 45 apps in 14 min -> erase -> iTunes restore
+via `itunes_restore.py --accessible` + `--continue-if "Персик" "2:58 PM"`, person typed the password, right first time,
+transfer ~22 min -> `SetupState: RestoredFromiTunesBackup`). Still to do: post-restore snapshot + full report once the
+apps are back; the WD2 driver (the restore is still hand-driven with the helpers). Found and fixed on the way:
+- **Passcode prompt arrived 30 min late on Windows.** Through a pipe idevicebackup2's output is block-buffered, so
+  "Waiting for passcode" only came out when it exited (MBErrorDomain/208 timeout). `BackupRunner._infer_handshake`
+  now announces the passcode after 8 s of silence and "streaming" once the folder grows 20 MB. Proven live.
+- **A failed FIRST backup stayed as the main backup** (0 GB, no Manifest.plist), was labelled "extra copy" in iTunes
+  and never proposed for clean-up. `_roll_back` now moves it to `<UDID>-failed-<stamp>`; `propose_moves` proposes
+  unfinished copies; `backup_labels` labels them "unfinished, don't use".
+- Restore dry run said "Mac"/"Finder" on Windows: now `host_words()`.
+- Right after the restart the phone briefly reported `SetupState: SetupUsingAssistant`, then
+  `RestoredFromiTunesBackup` (it's in the `com.apple.purplebuddy` domain: `ideviceinfo -q com.apple.purplebuddy`).
+- A phone left plugged in for hours can drop off the Apple device service (`usb_not_listed`); unlock/replug fixes it.
+
 **Update 2026-11-11 (rehearsal moved to the next session, nothing run on the phone):**
 - **All backups on this PC were deleted at the person's request** (copies exist on the Mac). The backup folder is empty,
   57.8 GB free. The proven password is still in Credential Manager. So step 1 below is a first backup again.

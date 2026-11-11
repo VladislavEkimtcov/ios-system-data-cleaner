@@ -158,6 +158,9 @@ def propose_moves(backups: List[Dict[str, Any]], free: Optional[float] = None) -
     for b in backups:
         if b["kind"] == "failed":
             add(b, "a backup that failed verification; it can't be restored from")
+        elif not b["usable"] and not (Path(b["path"]) / "Manifest.plist").is_file():
+            # a run that stopped before the phone sent anything (seen 2026-11-11: 0 GB, no Manifest.plist)
+            add(b, "an unfinished backup (it stopped before the phone sent its data); it can't be restored from")
     # 2. exact duplicates (same Manifest.db): keep the most protected one, offer the rest
     rank = {"protected": 0, "safety": 1, "main": 2, "older_safety": 3, "extra": 4, "older": 5, "failed": 6}
     groups: Dict[str, List[Dict[str, Any]]] = {}

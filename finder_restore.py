@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from common import connected_udids, ensure_utf8_console, state_path
+from common import connected_udids, ensure_utf8_console, host_words, state_path
 import restore_gates as gates
 
 STATUS_NAME = ".ui_restore_status.json"
@@ -814,7 +814,9 @@ def _phone_name(udid: str) -> str:
 
 def _setup_state(udid: str) -> str:
     """The phone's own record of how it was set up. After a finished restore it reads
-    RestoredFromiTunesBackup. Observed live 2026-11-09: it stays empty throughout the restore."""
+    RestoredFromiTunesBackup. Observed live 2026-11-09: it stays empty throughout the restore. Windows
+    2026-11-11: right after the restart it briefly read SetupUsingAssistant, then RestoredFromiTunesBackup
+    (so _finish must keep waiting for the latter, not stop at the first non-empty value)."""
     from common import _ideviceinfo
     return _ideviceinfo(udid, "-q", "com.apple.purplebuddy").get("SetupState", "")
 
@@ -822,7 +824,7 @@ def _setup_state(udid: str) -> str:
 def _restore_process_running() -> bool:
     """macOS runs the transfer in the AppleMobileBackup helper; it is busy for the whole restore
     (about 11 minutes for a 9 GB backup) and exits at the end. Observed live 2026-11-09.
-    Windows: iTunes ships AppleMobileBackup.exe in Common Files\Apple\Mobile Device Support; that it runs the
+    Windows: iTunes ships AppleMobileBackup.exe in Common Files/Apple/Mobile Device Support; that it runs the
     transfer there too is UNVERIFIED (check during the first Windows restore). If it doesn't, this stays False and
     Run._finish relies on the phone's own SetupState."""
     from common import process_running
@@ -833,7 +835,9 @@ def announce_backups(plan: Dict[str, Any], say: Callable[[str], None] = gates.sa
     """ALWAYS shown before a restore (dry run and real run): every backup of this phone on this Mac and
     which one will be restored. The agent must relay these lines to the person in chat and get their go-ahead."""
     lines = gates.describe_backups(plan.get("available_backups") or [])
-    say(f"BACKUPS_AVAILABLE: I found {sum(1 for ln in lines if not ln.startswith(' '))} backup(s) of this phone on this Mac.")
+    w = host_words()
+    say(f"BACKUPS_AVAILABLE: I found {sum(1 for ln in lines if not ln.startswith(' '))} backup(s) of this phone "
+        f"on this {w['computer']}.")
     for ln in lines:
         say("    " + ln.strip() if ln.startswith(" ") else "  - " + ln)
     for w in plan.get("warnings") or []:
@@ -841,7 +845,7 @@ def announce_backups(plan: Dict[str, Any], say: Callable[[str], None] = gates.sa
     apps = plan.get("backup_apps")
     say(f"RESTORING_FROM: the {plan.get('backup_kind') == 'clone' and 'protected safety copy' or 'main backup'}, your phone's data as of "
         f"{plan.get('backup_made_text') or plan.get('backup_made')}" + (f" ({apps} App Store apps)" if apps is not None else "") +
-        f". Finder lists copies by name, so I will make sure it selects "
+        f". {w['app']} lists copies by name, so I will make sure it selects "
         "one of this phone's copies showing exactly that time (never another phone's).")
     return lines
 
@@ -889,8 +893,10 @@ def restore(udid: Optional[str], source: str, max_age_hours: float, confirm: boo
             gates.say(f"Heads up: {w}")
         announce_backups(plan)
         if not confirm:
-            gates.say("This was a practice run, and nothing was changed. When you say go, I'll drive Finder to restore "
-                      "(about 10-30 minutes; the phone will restart once; a password box may appear on the Mac).")
+            w = host_words()
+            gates.say(f"This was a practice run, and nothing was changed. When you say go, I'll drive {w['app']} to "
+                      f"restore (about 10-30 minutes; the phone will restart once; a password box may appear on the "
+                      f"{w['computer']}).")
             return 0, {"ok": True, "dry_run": True, "plan": plan}
         if not hello_confirmed:
             r = gates.refusal(

@@ -63,6 +63,10 @@ PROGRESS_RE = re.compile(r"\[\s*={0,}\s*\]\s*(\d+)%\s*(?:\(([^)]+)\))?")
 # "(12.3 MB/45.6 MB)" suffix are per-batch bars and reach 100% many times per backup.
 OVERALL_RE = re.compile(r"\]\s*(\d+(?:\.\d+)?)%\s*Finished")
 HEARTBEAT_SEC = 30.0
+# Windows (pipe, block-buffered output): see BackupRunner._infer_handshake.
+INFER_TICK_SEC = 2.0
+PASSCODE_INFER_SEC = 8.0
+STREAM_INFER_BYTES = 20 * 1024 * 1024
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console window flashing up on Windows
 BACKUP_SUCCESS_RE = re.compile(r"Backup Successful\.", re.IGNORECASE)
 ERROR_RE = re.compile(r"ErrorCode \d+:|ERROR:", re.IGNORECASE)
@@ -114,6 +118,7 @@ class BackupRunner:
         self.last_reported_pct = -1
         self.handshake_confirmed = False
         self.passcode_requested = False
+        self._handshake_lock = threading.Lock()
 
         self.checkin_minutes = checkin_minutes
         self.overall_percent: Optional[float] = None
@@ -391,6 +396,7 @@ class BackupRunner:
             if pty is not None:
                 returncode = self._run_pty(cmd, env, pty, select)
             else:
+                threading.Thread(target=self._infer_handshake, args=(stop,), daemon=True).start()
                 returncode = self._run_pipe(cmd, env)
         finally:
             stop.set()
@@ -404,9 +410,21 @@ class BackupRunner:
     def _roll_back(self, partial: bool) -> None:
         """This run didn't produce a good backup: put the previous one back where it was. A half-written
         backup (partial) is removed; a complete-but-failed one is kept as `<UDID>-failed-<stamp>` to inspect."""
-        if not (self.udid and self._archived and self._archived.is_dir()):
+        if not self.udid:
             return
         live = self.backup_dir / self.udid
+        if not (self._archived and self._archived.is_dir()):
+            # No previous backup (a first backup): whatever is at the live path was written by this run, since
+            # any earlier one was renamed aside before it started. Don't leave it posing as the main backup
+            # (seen 2026-11-11: a 0 GB folder listed as "main", then labelled "extra copy" in iTunes); move it to
+            # <UDID>-failed-<stamp> so `backups` proposes it for the Trash.
+            if live.is_dir():
+                try:
+                    os.replace(str(live), str(_free_name(live.parent, f"{live.name}-failed-{archive_stamp(live)}")))
+                    self.log("  🗂️  Moved this run's unfinished backup aside as a failed backup (nothing to put back).")
+                except OSError as e:
+                    self.log(f"  ⚠️ Couldn't move this run's unfinished backup aside ({e}).")
+            return
         try:
             if live.exists():
                 if partial:
@@ -487,40 +505,74 @@ class BackupRunner:
         proc.wait()
         return proc.returncode
 
+    def _announce_passcode(self) -> None:
+        """Once per run: phase waiting_passcode, Ping and a banner. Called from the output reader or,
+        on Windows, from _infer_handshake (the reader and the watcher run on different threads)."""
+        with self._handshake_lock:
+            if self.passcode_requested or self.handshake_confirmed:
+                return
+            self.passcode_requested = True
+        self.update_status(
+            "waiting_passcode",
+            message="Waiting for passcode entry on iPhone display..."
+        )
+        self.log("\n🚨 PHYSICAL HANDSHAKE REQUIRED:")
+        self.log("   👉 Enter your passcode or tap Trust on the iPhone display now.")
+        self.notify(
+            message="Please enter passcode on iPhone screen to start backup.",
+            sound="Ping",
+            subtitle="Passcode Required"
+        )
+
+    def _confirm_handshake(self) -> None:
+        """Once per run: phase streaming, Glass and a banner."""
+        with self._handshake_lock:
+            if self.handshake_confirmed:
+                return
+            self.handshake_confirmed = True
+        self._stream_started = time.time()
+        self.update_status(
+            "streaming",
+            streaming_started_at=datetime.now(timezone.utc).isoformat(),
+            message="Passcode accepted. Encrypted payload streaming..."
+        )
+        self.log("\n✅ PASSCODE ACCEPTED!")
+        self.log("   Device unlocked. Encrypted backup streaming across USB bus...")
+        self.notify(
+            message="Passcode accepted! Streaming backup payload...",
+            sound="Glass",
+            subtitle="Handshake Confirmed"
+        )
+
+    def _infer_handshake(self, stop: threading.Event) -> None:
+        """Windows only. Through a pipe, idevicebackup2's C runtime buffers its output in blocks, so
+        "Waiting for passcode to be entered" only arrived when the tool exited, 30 minutes later, after the
+        phone had timed out (seen 2026-11-11). This watches the clock and the backup folder instead: no
+        handshake after PASSCODE_INFER_SEC means the phone is asking for its passcode; the folder growing
+        by STREAM_INFER_BYTES means the passcode was accepted and files are coming in."""
+        started = time.time()
+        first_size: Optional[int] = None
+        while not stop.wait(INFER_TICK_SEC):
+            if self.handshake_confirmed:
+                return
+            if not self.passcode_requested and time.time() - started >= PASSCODE_INFER_SEC:
+                self._announce_passcode()
+            size = self._backup_bytes()
+            if first_size is None:
+                first_size = size  # Info.plist and friends are written before the passcode
+            elif size - first_size >= STREAM_INFER_BYTES:
+                self._confirm_handshake()
+                return
+
     def _process_line(self, line: str) -> None:
         """Parses output line, dispatches notifications, and updates state."""
         # 1. Passcode Prompt Check
         if PASSCODE_PROMPT_RE.search(line):
-            if not self.passcode_requested:
-                self.passcode_requested = True
-                self.update_status(
-                    "waiting_passcode",
-                    message="Waiting for passcode entry on iPhone display..."
-                )
-                self.log("\n🚨 PHYSICAL HANDSHAKE REQUIRED:")
-                self.log("   👉 Enter your passcode or tap Trust on the iPhone display now.")
-                self.notify(
-                    message="Please enter passcode on iPhone screen to start backup.",
-                    sound="Ping",
-                    subtitle="Passcode Required"
-                )
+            self._announce_passcode()
 
         # 2. Handshake Acceptance Check (Passcode entered!)
         elif not self.handshake_confirmed and (RECEIVING_FILES_RE.search(line) or "Finished" in line):
-            self.handshake_confirmed = True
-            self._stream_started = time.time()
-            self.update_status(
-                "streaming",
-                streaming_started_at=datetime.now(timezone.utc).isoformat(),
-                message="Passcode accepted. Encrypted payload streaming..."
-            )
-            self.log("\n✅ PASSCODE ACCEPTED!")
-            self.log("   Device unlocked. Encrypted backup streaming across USB bus...")
-            self.notify(
-                message="Passcode accepted! Streaming backup payload...",
-                sound="Glass",
-                subtitle="Handshake Confirmed"
-            )
+            self._confirm_handshake()
 
         # 3. Progress Milestone Parsing. Only the phone's overall percentage counts; per-batch
         # bars ("(x MB/y MB)") are ignored, they hit 100% for every batch of files.
