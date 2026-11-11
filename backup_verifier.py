@@ -331,8 +331,11 @@ def inspect_backup(
     interactive: bool = True,
     steer_ui: bool = False,
     min_bytes: Optional[int] = None,
+    failures_out: Optional[list] = None,
 ) -> bool:
-    """Prints a report and returns True if the backup passes every check."""
+    """Prints a report and returns True if the backup passes every check.
+    `failures_out`, if given, receives the failure lines (so a caller can tell an unproven password
+    from a broken backup: those lines start with PASSWORD_UNPROVEN_PREFIX)."""
     print(f"\n{'=' * 70}")
     print(f"Backup: {backup_dir.name}")
     print(f"Path:   {backup_dir}")
@@ -440,7 +443,17 @@ def inspect_backup(
     else:
         print("\n  ✅ RESULT: PASS - safe to proceed to erase")
     print("=" * 70)
+    if failures_out is not None:
+        failures_out.extend(failures)
     return not failures
+
+
+PASSWORD_UNPROVEN_PREFIX = "PROOF OF PASSWORD REQUIRED"
+
+
+def only_password_unproven(failures: list) -> bool:
+    """True when the backup itself is fine and the one thing missing is proof of the password."""
+    return bool(failures) and all(str(f).startswith(PASSWORD_UNPROVEN_PREFIX) for f in failures)
 
 
 def main() -> int:

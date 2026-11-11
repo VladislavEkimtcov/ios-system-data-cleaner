@@ -33,6 +33,13 @@ GIB = 1024 ** 3
 ARCHIVE_SUFFIX = re.compile(r"-\d{8}-\d{6}$|-prewipe$")
 PREWIPE_SUFFIX = "-prewipe"
 
+
+def safety_copy_enabled() -> bool:
+    """The -prewipe safety copy is made only on macOS, where APFS clones it instantly at no space cost.
+    On Windows it is a full ~10 GB copy, and the whole-new-backup rename-aside already keeps every previous
+    backup, so it is skipped there (decided 2026-11-11)."""
+    return sys.platform == "darwin"
+
 REPO_ROOT = Path(__file__).resolve().parent
 
 
@@ -780,19 +787,19 @@ def process_running(*names: str) -> bool:
 
 
 MIN_BACKUP_FREE_GB = 20.0
-NON_COW_SPACE_FACTOR = 2.2  # the new backup + its full safety copy, plus 10% headroom
+NON_COW_SPACE_FACTOR = 1.2  # the new backup plus 20% headroom (no safety copy off macOS)
 
 
 def space_needed_gb(estimate_bytes: Optional[int], platform: Optional[str] = None) -> Tuple[float, str]:
     """Free space a backup cycle needs, with the reason in plain words. On a Mac (APFS) the safety copy is a
-    copy-on-write clone that costs ~nothing, so a flat 20 GB is enough. On Windows (NTFS) it is a full copy:
-    the new backup plus its copy, about 2.2x the backup (the previous backup is only renamed aside)."""
+    copy-on-write clone that costs ~nothing, so a flat 20 GB is enough. Elsewhere there is no safety copy
+    (see safety_copy_enabled): the new backup plus headroom, about 1.2x (the previous backup is only renamed aside)."""
     plat = platform or sys.platform
     if plat == "darwin" or not estimate_bytes:
         return MIN_BACKUP_FREE_GB, "a fixed minimum"
     est_gb = estimate_bytes / GB
     need = max(MIN_BACKUP_FREE_GB, round(est_gb * NON_COW_SPACE_FACTOR, 1))
-    return need, f"the backup, about {est_gb:.1f} GB, plus its full safety copy"
+    return need, f"the backup, about {est_gb:.1f} GB, plus some headroom"
 
 
 def make_prewipe_clone(src: Path, verbose: bool = True) -> Path:

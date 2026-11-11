@@ -123,6 +123,8 @@ Agents operating in this repository must strictly adhere to these 5 golden rules
 * **Every backup is a whole new backup.** `backup_runner.py` renames the previous backup aside (`${UDID}-<its timestamp>`,
   an instant rename) before it starts, so a run can never overwrite it. If a run fails or fails verification, the previous
   backup is put back (a failed one is kept as `${UDID}-failed-<timestamp>`).
+* **Windows: no safety copy** (`common.safety_copy_enabled()`, decided 2026-11-11). Off APFS it is a full ~10 GB copy, and
+  the rename-aside above already keeps the previous backup. Don't promise the person "a protected extra copy" there.
 * The runner then makes the APFS safety clone `${UDID}-prewipe` (`make_prewipe_clone`, instant, no extra space at first). A
   stale clone is **kept** as `${UDID}-prewipe-<its timestamp>` instead of being replaced. This is what protects the good
   copy when a later backup turns out worse (0 apps, 2026-11-10).
@@ -212,6 +214,21 @@ backup runner prints them when it finishes) and relay every line, including the 
   - The pipeline integrates [`market_pricing.py`](market_pricing.py) to track real-world like-for-like refurbished replacement values (e.g. Swappa, Back Market, eBay Refurbished) alongside new retail replacement purchase avoidance.
   - When the system detects an uncalibrated or stale (>14 days) market quotation, it emits an **Agent Live Research Directive** (`⚡ [AGENT LIVE RESEARCH DIRECTIVE: MARKET VALUATION NEEDED]`).
   - The autonomous agent is stimulated to query online prices (via your web-search tool), calibrate the ledger (`python3 market_pricing.py set --model <MODEL> --refurb <PRICE> --source "<SOURCE>"`), and produce live-calibrated hardware ROI.
+* **Don't make the person wait for the app re-download (user feedback, 2026-11-10).** The final tally is only honest
+  once the apps have downloaded again, which can take an hour. The moment the restore is confirmed, tease the tally and
+  offer two ways to get it, then let them go:
+  > "Your phone's back! 🎉 One fun bit left: how much space we actually won back. That number settles once your apps
+  > finish downloading again. Two easy ways:
+  > 1. **Leave it plugged in** and go do your thing. I'll keep an eye on it and post the tally when the downloads finish.
+  > 2. **Unplug and use your phone.** Whenever it's done downloading (later today is fine), plug it back in and say
+  >    *'tally'*, and I'll show you the before-and-after.
+  > Either way, nothing else is needed from you: the phone is fully restored."
+  Keep it light and a little proud ("the fun statistic", "the reward"), never a chore or a warning. On "tally" (or
+  when the leave-it-plugged-in wait ends): confirm the apps are back (App Store app count vs the backup's, or ask),
+  run `storage_monitor.py --snap post_restore` and `--diff`, and show the full report below. If they never come back,
+  the restore still counts as done; mention the tally once next time they start a session, not repeatedly.
+  Take the `before_reset` snapshot BEFORE the erase so there is something to compare (it was missed on Windows on
+  2026-11-10 and the tally had to be pieced together).
 * **Always show the full space and money report at the end, to the person, in the chat.** It is the reward for going through the whole cycle (user feedback, 2026-11-10), so never replace it with a short summary and never skip it because the numbers look small or the prices are uncertain. Run `storage_monitor.py --diff` and show its report (storage bar before/after, GB recovered, free-space gain, refurbished and new-hardware value avoided, NAND value, household totals).
 * **A best-possible estimate beats a blank or a fallback.** Even if the number may be wrong, always do the live price lookup and record it, and say plainly that it is an estimate with its range and sources. Use the model's real launch price for "new retail" (the $799 default is wrong for older phones, e.g. iPhone 8 64 GB = $699). Don't hold the report back waiting for a perfect quote.
 * Report exact metrics: GB of phantom cache purged, percentage increase in free space, like-for-like refurbished replacement value saved, and retail hardware replacement avoided.
@@ -415,7 +432,8 @@ Screens it knows: no window (opens the phone from the sidebar), activating, **We
    before re-running.
 7. **Hard no's, even in a handoff:** never click "Restore Backup..." on the Summary page; never click
    anything on a phone that isn't erased; never pick a backup other than the expected one.
-8. **After**: `storage_monitor.py --snap post_restore` and `--diff`, but only after app re-downloads settle.
+8. **After**: offer the tally the fun way (Rule 5, "Don't make the person wait"): leave the phone plugged in while the
+   apps download, or unplug and come back later saying "tally". Then `storage_monitor.py --snap post_restore` and `--diff`.
 
 ### Using an OS-control MCP
 

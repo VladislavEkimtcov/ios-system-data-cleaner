@@ -45,6 +45,7 @@ from common import (
     find_tool,
     host_mount,
     make_prewipe_clone,
+    safety_copy_enabled,
     space_needed_gb,
     state_path,
 )
@@ -250,6 +251,15 @@ class BackupRunner:
         self.log(f"  Target Device:       {self.device_name} ({self.product_type})")
         self.log(f"  UDID:                {self.udid}")
         self.log(f"  iOS Version:         {self.device_info.get('ProductVersion', 'Unknown')}")
+
+        # The "before" storage snapshot for the final space report, taken now whatever verification says
+        # later (on Windows 2026-11-10 none was taken and the tally had nothing to compare against).
+        try:
+            from storage_monitor import record_current_snapshot
+            if record_current_snapshot("before_reset", udid=self.udid):
+                self.log("  Storage Snapshot:    ✅ 'before' recorded for the final space report")
+        except Exception:  # noqa: BLE001
+            pass
 
         # Rough size of what's coming: the phone's used storage. An upper bound (iCloud-only
         # photos and app binaries aren't backed up), used for check-ins until the phone's own
@@ -541,6 +551,38 @@ class BackupRunner:
             self._last_error = line
             self.log(f"   [!] Error detected: {line}")
 
+    def _prove_password_with_helper(self, timeout_minutes: float = 30.0) -> bool:
+        """Starts the password helper page, opens it in the browser, and waits for the person to prove the
+        password there (the helper saves it to the Keychain / Credential Manager). True once proven."""
+        try:
+            from finder_restore import launch_password_helper, open_in_system_browser
+        except Exception as e:  # noqa: BLE001
+            self.log(f"  ⚠️ Couldn't load the password helper: {e}")
+            return False
+        self.log("  ✅ Backup copied and checked. The password isn't proven on this computer yet.")
+        started = launch_password_helper(self.udid)
+        if not started:
+            self.log("  ⚠️ The password helper page didn't start.")
+            return False
+        url, proc = started
+        opened = open_in_system_browser(url)
+        self.log("  🔑 Password helper page " + ("opened in the browser." if opened else f"ready at {url}"))
+        self.update_status("proving_password", helper_url=url, browser_opened=opened,
+                           message="Backup copied and checked. Prove the backup password on the helper page.")
+        self.notify(message="Backup done! Please prove your backup password on the page that just opened.",
+                    sound="Ping", subtitle="One quick step")
+        try:
+            code = proc.wait(timeout=timeout_minutes * 60 + 60)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            code = 1
+        if code == 0:
+            self.log("  ✅ Password proven on the helper page.")
+            self.notify(message="Password proven! Making the safety copy now.", sound="Glass", subtitle="Thanks")
+            return True
+        self.log("  ⚠️ The password wasn't proven on the helper page.")
+        return False
+
     def post_flight_verification(self) -> Tuple[bool, str]:
         """
         Executes backup verification, Keychain check, APFS CoW snapshot,
@@ -557,13 +599,24 @@ class BackupRunner:
         # 1. 6-Point Cryptographic Verification Gate
         try:
             import backup_verifier
+            failures: list = []
             passed = backup_verifier.inspect_backup(
                 backup_dir=target_backup,
                 max_age_hours=1.0,
                 password=self.password,
                 skip_password_check=False,
-                interactive=False
+                interactive=False,
+                failures_out=failures,
             )
+            if not passed and backup_verifier.only_password_unproven(failures):
+                # The backup is good; only the proof is missing (first backup on a new computer).
+                # Not a failure: open the helper page, wait for the proof, then carry on.
+                if not self._prove_password_with_helper():
+                    self.password_unproven = True
+                    return False, "Backup complete, but the password isn't proven yet."
+                passed = backup_verifier.inspect_backup(
+                    backup_dir=target_backup, max_age_hours=1.0, password=self.password,
+                    skip_password_check=False, interactive=False)
             if not passed:
                 self.notify(
                     message="Backup verification failed! Do not erase device.",
@@ -577,27 +630,25 @@ class BackupRunner:
 
         self.log("  ✅ Cryptographic 6-Point Gate: PASS")
 
-        # 2. Immutable pre-wipe safety clone (atomic, never nested). This is the
-        #    fallback that must survive any later sync, so it is created once and kept.
-        import shutil
-        prewipe_clone: Optional[Path] = None
-        if sys.platform != "darwin":
-            # Off APFS this is a full copy and takes minutes: say so, so check-ins don't look stuck.
-            self.update_status("cloning", message="Making the safety copy of the backup (a full copy on this disk; "
-                                                  "a few minutes)...")
-            self.log("  ⏳ Making the safety copy (a full copy on this disk, a few minutes)...")
+        # 2. Immutable pre-wipe safety clone (atomic, never nested), macOS only: there APFS clones it instantly
+        #    for free. On Windows it would be a full ~10 GB copy, and the previous backup is already kept by the
+        #    rename-aside, so it is skipped (safety_copy_enabled).
+        if safety_copy_enabled():
+            try:
+                prewipe_clone = make_prewipe_clone(target_backup, verbose=False)
+                self.log(f"  ✅ Immutable Safety Clone:    {prewipe_clone.name}")
+            except CloneError as e:
+                self.notify("Safety clone failed; refusing to prune.", sound="Basso")
+                self.update_status("failed", message=f"clone failed: {e}")
+                return False, f"Pre-wipe safety clone failed: {e}"
+        else:
+            self.log("  ℹ️  Safety copy: skipped on this computer (it would be a full copy; the previous backup is kept "
+                     "by name instead).")
         try:
-            t0 = time.time()
-            prewipe_clone = make_prewipe_clone(target_backup, verbose=False)
-            if sys.platform != "darwin":
-                self.log(f"     copy took {time.time() - t0:.0f} s")
-            self.log(f"  ✅ Immutable Safety Clone:    {prewipe_clone.name}")
             from backup_labels import ensure_labels
-            ensure_labels(self.udid, say=lambda m: self.log(f"  🏷️  {m}"))   # distinct names in Finder's restore pop-up
-        except CloneError as e:
-            self.notify("Safety clone failed; refusing to prune.", sound="Basso")
-            self.update_status("failed", message=f"clone failed: {e}")
-            return False, f"Pre-wipe safety clone failed: {e}"
+            ensure_labels(self.udid, say=lambda m: self.log(f"  🏷️  {m}"))   # distinct names in the restore pop-up
+        except Exception as e:  # noqa: BLE001
+            self.log(f"  (couldn't label the backups: {e})")
 
         # 3. No automatic deleting, ever. The agent lists the backups with their stats and proposes the
         #    next clean-up move (`restorer.py backups`); the person decides.
@@ -664,6 +715,15 @@ class BackupRunner:
             return False
 
         ok, msg = self.post_flight_verification()
+        if not ok and getattr(self, "password_unproven", False):
+            # The new backup is complete and good: keep it (no roll-back), just block the erase.
+            py = "python" if sys.platform == "win32" else "python3"
+            text = ("The backup is complete and kept, but the password wasn't proven, so erasing the phone stays "
+                    f"blocked. Prove it on the helper page: {py} password_tracker.py --udid {self.udid} "
+                    "--exit-on-success, then the safety copy can be made.")
+            self.log(f"\n⚠️ {text}")
+            self.update_status("password_unproven", message=text)
+            return False
         if not ok:
             self.log(f"\n❌ Post-flight verification failed: {msg}")
             self._roll_back(partial=False)

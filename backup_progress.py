@@ -28,7 +28,7 @@ from common import GB, state_path
 STATUS_FILE = state_path(".backup_status.json")
 
 # Phases written by BackupRunner, in order.
-TERMINAL_PHASES = {"completed", "failed"}
+TERMINAL_PHASES = {"completed", "failed", "password_unproven"}
 PHASE_LINES = {
     "preflight": "Checking the phone, disk space and encryption...",
     "starting": "Connecting to the phone's backup service...",
@@ -36,9 +36,14 @@ PHASE_LINES = {
     "streaming": "Passcode accepted. Backup started and copying data from the phone.",
     "stream_done": "All data copied from the phone. Finishing up...",
     "verifying": "Copy finished. Verifying the backup (encryption, password, integrity)...",
-    "cloning": "Backup verified. Making the safety copy (on Windows a full copy: a few minutes)...",
+    "proving_password": ("Backup copied and checked. ACTION NEEDED: prove you remember the backup password on the "
+                         "helper page that just opened in your browser (it tries what you remember and common "
+                         "variations)."),
+    "cloning": "Backup verified. Making the safety copy...",
     "completed": "Backup complete and verified.",
     "failed": "Backup FAILED.",
+    "password_unproven": ("The backup is complete and kept, but the password wasn't proven, so erasing the phone "
+                          "stays blocked. Open the password helper page again to finish."),
 }
 # No status update for this long while the engine says it's busy = report a stall.
 STALL_AFTER_SEC = 180
@@ -206,7 +211,8 @@ def describe(status: Optional[Dict[str, Any]], now: Optional[float] = None) -> D
     out.pop("udid", None)  # nothing downstream needs it; keeps agent transcripts clean
     out["running"] = bool(not terminal and alive is not False)
     out["stalled"] = bool(not terminal and alive and age is not None and age > STALL_AFTER_SEC
-                          and phase not in ("waiting_passcode", "cloning"))  # a full copy writes no status
+                          # a full copy writes no status; a person proving the password takes their time
+                          and phase not in ("waiting_passcode", "cloning", "proving_password"))
     out["engine_died"] = bool(not terminal and alive is False)
 
     if out["engine_died"]:
@@ -219,6 +225,8 @@ def describe(status: Optional[Dict[str, Any]], now: Optional[float] = None) -> D
         summary = progress_line(status)
     elif phase == "failed":
         summary = f"Backup FAILED: {status.get('error') or status.get('message') or 'unknown error'}"
+    elif phase == "password_unproven":
+        summary = status.get("message") or PHASE_LINES["password_unproven"]
     elif phase == "completed":
         took = status.get("duration_seconds")
         summary = "Backup complete and verified" + (f" (took {_fmt_duration(took)})." if took else ".")

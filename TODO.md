@@ -65,6 +65,20 @@ functions change and how behaviour changes. "Unverified" marks a guess that must
 
 ### HANDOFF: second Windows run (read this first)
 
+**Update 2026-11-11 (rehearsal moved to the next session, nothing run on the phone):**
+- **All backups on this PC were deleted at the person's request** (copies exist on the Mac). The backup folder is empty,
+  57.8 GB free. The proven password is still in Credential Manager. So step 1 below is a first backup again.
+- **No safety copy on Windows any more** (`common.safety_copy_enabled()` = macOS only; decided with the person: on NTFS it
+  is a full ~10 GB copy, and the rename-aside of whole-new backups already keeps the previous one). `backup_runner` and
+  `iphone_manager._existing_backup_gate` skip it; the Windows space budget is now ~1.2x the backup, not 2.2x.
+  `--source clone` has nothing to pick on Windows; `auto` uses the main backup.
+- **Done:** the false "Backup FAILED" fix (below): a password-only failure opens the helper page, waits for
+  `PROOF_OK`, then carries on; if never proven the phase is `password_unproven` (backup kept, no roll-back, erase blocked).
+  And `before_reset` is now recorded in `BackupRunner.preflight`. 290 tests pass.
+- Phone at the time: "Персик", iOS 16.7.16, 26.7 GB used, battery 93%. There is no live app-count tool on this PC
+  (`iphone_manager.py apps list` reads the BACKUP, not the phone): check the app count from `restorer.py backups` after
+  the new backup.
+
 **Where things stand (2026-11-10, end of day).** The full cycle has run once on this PC, by hand-driven iTunes:
 whole-new backup (9.8 GB, ~13 min, passcode on the phone) -> password proven with the helper page (stored in Credential
 Manager) -> safety copy (robocopy) -> erase on the phone -> iTunes restore (agent pressed Continue through UI Automation,
@@ -141,6 +155,12 @@ helper page itself (`password_tracker.py --exit-on-success`, opens the browser),
 the backup list once proven. Today that took a manual `iphone_manager._existing_backup_gate(udid)` after the proof.
 
 **Small things noticed:**
+- **No "before" storage snapshot was taken on Windows**, so `storage_monitor.py --diff` had nothing to compare (the final
+  report for run 1 was assembled by hand from the backup log's "Data on Phone" and the post_restore snapshot: 26.7 ->
+  26.49 GB used, ~0.2 GB, i.e. nothing, as expected: the phone had been restored on the Mac the same morning). The runner
+  only records its snapshot after a passing verification, and the manual `_existing_backup_gate` path records none.
+  Fix: record `before_reset` in `BackupRunner.preflight` (or at the start of `revive`), whatever verification says.
+- iPhone 8 price now in this PC's ledger: refurb $90 (Back Market US 64 GB $57-124, mid-2026), retail $699 (launch).
 - `finder_restore.announce_backups` / the dry run still say "this Mac" and "Finder" on Windows (`ui-restore` dry run).
 - One run of the suite had `test_backup_manager...test_exact_duplicates_are_proposed_but_the_protected_copy_is_kept`
   fail once and pass in 4 reruns: probably timing-dependent (ages / mtimes); look before trusting it.

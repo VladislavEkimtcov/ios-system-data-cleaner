@@ -272,7 +272,7 @@ def _existing_backup_gate(udid: str) -> Optional[Path]:
     """--use-existing: the phone's current backup must pass the full pre-erase gate (fresh, finished, encrypted,
     password proven); then the safety copy, labels and the backup list, exactly as after a new backup."""
     from backup_verifier import inspect_backup
-    from common import CloneError, backup_root, make_prewipe_clone
+    from common import CloneError, backup_root, make_prewipe_clone, safety_copy_enabled
     live = backup_root(udid) / udid
     if not live.is_dir():
         print("  🚨 There is no backup of this phone on this computer yet. Run without --use-existing to take one.")
@@ -281,12 +281,13 @@ def _existing_backup_gate(udid: str) -> Optional[Path]:
         print("\n  ❌ Pre-erase gate FAILED for the existing backup. Phone erase is BLOCKED. "
               "Run without --use-existing to take a fresh one.", file=sys.stderr)
         return None
-    try:
-        clone = make_prewipe_clone(live)
-    except CloneError as e:
-        print(f"  ❌ Safety copy failed: {e}", file=sys.stderr)
-        return None
-    print(f"  ✅ Safety copy: {clone.name}")
+    if safety_copy_enabled():  # macOS only (free APFS clone); skipped on Windows, where it is a full copy
+        try:
+            clone = make_prewipe_clone(live)
+        except CloneError as e:
+            print(f"  ❌ Safety copy failed: {e}", file=sys.stderr)
+            return None
+        print(f"  ✅ Safety copy: {clone.name}")
     try:
         from backup_labels import ensure_labels
         ensure_labels(udid, say=lambda m: print(f"  🏷️  {m}"))

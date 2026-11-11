@@ -204,10 +204,16 @@ class TestSpaceBudget(unittest.TestCase):
     def test_mac_keeps_the_flat_minimum(self):
         self.assertEqual(common.space_needed_gb(50 * common.GB, "darwin")[0], 20.0)
 
-    def test_windows_needs_backup_plus_copy(self):
-        need, why = common.space_needed_gb(15 * common.GB, "win32")
-        self.assertEqual(need, 33.0)
-        self.assertIn("safety copy", why)
+    def test_windows_needs_backup_plus_headroom_no_copy(self):
+        need, why = common.space_needed_gb(25 * common.GB, "win32")
+        self.assertEqual(need, 30.0)
+        self.assertNotIn("safety copy", why)
+
+    def test_safety_copy_only_on_macos(self):
+        with mock.patch.object(common.sys, "platform", "win32"):
+            self.assertFalse(common.safety_copy_enabled())
+        with mock.patch.object(common.sys, "platform", "darwin"):
+            self.assertTrue(common.safety_copy_enabled())
 
     def test_small_backup_still_needs_the_minimum(self):
         self.assertEqual(common.space_needed_gb(2 * common.GB, "win32")[0], 20.0)
@@ -404,3 +410,84 @@ class TestCredentialManagerLive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnprovenPasswordIsNotAFailure(unittest.TestCase):
+    """A first backup on a new computer, good except for proof of the password: open the helper page and carry on,
+    never report "Backup FAILED" and never roll the good backup back (TODO W, second-run handoff)."""
+
+    def _fake_inspect(self, results):
+        calls = iter(results)
+
+        def inspect(**kw):
+            ok, fails = next(calls)
+            if kw.get("failures_out") is not None:
+                kw["failures_out"].extend(fails)
+            return ok
+        return inspect
+
+    def _setup(self, tmp):
+        r = _runner(tmp)
+        (Path(tmp) / "U1").mkdir()
+        return r
+
+    def test_only_password_unproven(self):
+        import backup_verifier as bv
+        self.assertTrue(bv.only_password_unproven([bv.PASSWORD_UNPROVEN_PREFIX + ": x"]))
+        self.assertFalse(bv.only_password_unproven([bv.PASSWORD_UNPROVEN_PREFIX + ": x", "backup is NOT encrypted"]))
+        self.assertFalse(bv.only_password_unproven([]))
+
+    def test_proven_on_the_helper_page_carries_on_to_the_safety_copy(self):
+        import backup_verifier as bv
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._setup(tmp)
+            pwd_fail = (False, [bv.PASSWORD_UNPROVEN_PREFIX + ": no proof"])
+            with mock.patch.object(bv, "inspect_backup", side_effect=self._fake_inspect([pwd_fail, (True, [])])), \
+                 mock.patch.object(r, "_prove_password_with_helper", return_value=True) as helper, \
+                 mock.patch.object(backup_runner, "safety_copy_enabled", return_value=True), \
+                 mock.patch.object(backup_runner, "make_prewipe_clone",
+                                   side_effect=backup_runner.CloneError("stop here")) as clone:
+                ok, msg = r.post_flight_verification()
+            helper.assert_called_once()
+            clone.assert_called_once()   # got past verification to the safety copy
+            self.assertIn("clone", msg)
+
+    def test_not_proven_keeps_the_backup_and_says_so(self):
+        import backup_verifier as bv
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._setup(tmp)
+            pwd_fail = (False, [bv.PASSWORD_UNPROVEN_PREFIX + ": no proof"])
+            with mock.patch.object(r, "preflight", return_value=(True, "")), \
+                 mock.patch.object(r, "run_backup", return_value=(True, "")), \
+                 mock.patch.object(bv, "inspect_backup", side_effect=self._fake_inspect([pwd_fail])), \
+                 mock.patch.object(r, "_prove_password_with_helper", return_value=False), \
+                 mock.patch.object(r, "_roll_back") as roll_back:
+                self.assertFalse(r.execute())
+            roll_back.assert_not_called()
+            import backup_progress
+            snap = backup_progress.describe(backup_progress.read_status(Path(tmp) / "s.json"))
+            self.assertEqual(snap["phase"], "password_unproven")
+            self.assertNotIn("FAILED", snap["summary"])
+            self.assertIn("kept", snap["summary"])
+
+    def test_a_real_failure_still_fails(self):
+        import backup_verifier as bv
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._setup(tmp)
+            bad = (False, ["backup is NOT encrypted", bv.PASSWORD_UNPROVEN_PREFIX + ": x"])
+            with mock.patch.object(bv, "inspect_backup", side_effect=self._fake_inspect([bad])), \
+                 mock.patch.object(r, "_prove_password_with_helper") as helper:
+                ok, _ = r.post_flight_verification()
+            self.assertFalse(ok)
+            helper.assert_not_called()
+
+    def test_windows_skips_the_safety_copy(self):
+        import backup_verifier as bv
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self._setup(tmp)
+            with mock.patch.object(bv, "inspect_backup", return_value=True), \
+                 mock.patch.object(backup_runner, "safety_copy_enabled", return_value=False), \
+                 mock.patch.object(backup_runner, "make_prewipe_clone") as clone:
+                ok, _ = r.post_flight_verification()
+            self.assertTrue(ok)
+            clone.assert_not_called()
