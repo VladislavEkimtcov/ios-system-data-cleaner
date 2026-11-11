@@ -46,9 +46,8 @@ a backup taken before the apps had re-downloaded (0 apps) does not (guarded: `re
       import are ignored. Call `backup_root()` at use sites.
 - [x] README badge says "Platform: macOS", but Windows is supported (now "macOS | Windows").
 - [ ] Fresh Mac with no Homebrew: prove the `dep_installer.py --tools` Homebrew-missing branch.
-- [ ] Click through the password helper page (`password_tracker.py --exit-on-success`) in a real browser.
-- [ ] Windows: section W, everything that needs no person is done (2026-11-10, see "Progress" there). Left: install
-      iTunes (UAC click), a live backup (passcode), then the iTunes recon/driver (WD1 captures, WD2, WD7).
+- [x] Click through the password helper page (`password_tracker.py --exit-on-success`) in a real browser (done on Windows 2026-11-10, twice: PROOF_OK both times).
+- [ ] Windows: first full cycle done 2026-11-10 (restore driven by hand). Next: "HANDOFF: second Windows run" in section W.
 
 ---
 
@@ -63,6 +62,91 @@ functions change and how behaviour changes. "Unverified" marks a guess that must
 - Every backup is a whole new backup; nothing is overwritten or deleted automatically.
 - The password is never typed, read or logged by code or by the agent.
 - The person is alerted (sound + banner) at every point that needs them, and told the moment it is crossed.
+
+### HANDOFF: second Windows run (read this first)
+
+**Where things stand (2026-11-10, end of day).** The full cycle has run once on this PC, by hand-driven iTunes:
+whole-new backup (9.8 GB, ~13 min, passcode on the phone) -> password proven with the helper page (stored in Credential
+Manager) -> safety copy (robocopy) -> erase on the phone -> iTunes restore (agent pressed Continue through UI Automation,
+person typed the password; two deliberate wrong passwords first) -> transfer ~21 min -> phone came back
+`SetupState: RestoredFromiTunesBackup`, name "Персик ", apps re-downloading. **Not done yet for that run: the
+post-restore storage snapshot and the space-and-money report** (AGENTS Rule 5), once the apps have finished downloading:
+`python storage_monitor.py --snap post_restore` then `python storage_monitor.py --diff`, shown in full.
+
+**The box now:** Windows 10 IoT Enterprise LTSC 2021, not elevated, UAC on (installs need the person's click).
+iTunes 12.13.12.3 (Win32) + Apple Mobile Device Service; tools in `tools\bin` (pinned release, hash-checked);
+`iOSbackup` installed (password proof works on Windows); proven password in Credential Manager as `iOS Backup:<UDID>`.
+Backups in `%APPDATA%\Apple Computer\MobileSync\Backup`: `<UDID>` (main) and `<UDID>-prewipe` (safety copy), both
+Nov 10 2:27 PM, 45 apps. A restore leaves iTunes' own copies too: run `python restorer.py backups` before the next run.
+
+**Goal of the second run:** the same cycle, but with the restore driven by code instead of by hand, and nothing else
+learned the hard way. In order:
+1. Fix the runner's false "Backup FAILED" on a first backup without a proven password (below), then take a new backup
+   (`python backup_runner.py` in the background + `--watch` as an event monitor). Tell the person beforehand the phone
+   will ask for the passcode; the `--watch` stream can miss `waiting_passcode` if they are quick.
+2. Check `restorer.py backups` lists the apps (0-app trap, Rule 4c), then ask the person to erase (Rule 3b wording).
+3. Restore with the WD2 driver if written, else by hand with the commands below. Keep watching with
+   `python itunes_restore.py --watch` (as an event monitor; it never hangs).
+4. Post-restore snapshot + full report.
+
+**Commands that exist now (`itunes_restore.py`, all Windows-only, none presses a forbidden button):**
+- `--accessible`: (re)start iTunes so its controls are readable (see "screen reader" below). Refuses during a transfer.
+- `--dump [--save NAME]`: read-only snapshot, serial/phone number redacted.
+- `--continue-if "Персик" "2:27 PM"`: presses Continue ONLY if Welcome shows "Restore from this backup" with that
+  phone's entry at that time, then waits for the "Enter Password" window. Prints `PASSWORD_BOX_UP`. Exit 4 = didn't press.
+- `--retry-password "Персик" "2:27 PM"`: after the helper page proved the password: OK on the wrong-password alert (only
+  that alert, checked by its text), the same Welcome check, Continue, wait for the box. The person asked for exactly this.
+- `--watch [PREFIX]`: one line per change (windows, screen, `transfer=running|no`); with PREFIX saves fixtures.
+- Python: `press(name)` refuses `FORBIDDEN_BUTTONS` (Restore Backup, Restore iPhone…, Set up as new iPhone, Back Up Now,
+  Sync); `itunes_windows()`, `dismiss_wrong_password_alert()`, `check_welcome()`, `wait_for()`.
+
+**What iTunes on Windows does (all seen live 2026-11-10; design WD2 around these):**
+- **Screen reader:** iTunes builds its UI Automation tree only if Windows says a screen reader is running when iTunes
+  starts (13 elements otherwise; 87 on the Summary with it). `start_accessible()` sets `SPI_SETSCREENREADER` only around
+  start-up and restores it. If iTunes is already open without it, the restart can take >30 s (it reported "didn't close"
+  once, then closed): retry rather than give up.
+- **Opening the phone:** the toolbar button "iPhone" (InvokePattern) opens it; selecting the sidebar row does nothing.
+  On an erased phone iTunes opens the Welcome screen by itself.
+- **Welcome:** `finder_restore.classify` says "welcome". "Restore from this backup:" (radio, value 1) was preselected,
+  the pop-up showed "Персик · main · Nov 10, 2:27 PM" (the `backup_labels` Display Name, so labels DO reach iTunes)
+  and a "Last Backed Up: Today 2:27 PM" line, which `backup_picker` can use like Finder's. The backup list itself was
+  never opened (preselection was right): capturing the open list is still to do (WD4).
+- **Continue -> "Enter Password":** a separate top-level window (`Enter Password`, class `iTunesCustomModalDialog`), empty
+  box, OK disabled until something is typed, no Keychain-style prefill. **While it is open, every UI Automation call into
+  iTunes hangs** (the dump and InvokePattern both time out), so: press Continue from a background thread, and detect
+  the box by window title/class (`itunes_windows()`), never by reading the tree.
+- **Wrong password:** iTunes first shows its "Restoring iPhone from backup…" progress box (`iPhone`,
+  `iTunesCustomFauxModalDialog`) and even starts `AppleMobileBackup.exe` for ~10 s, THEN the alert (`iTunes`,
+  `iTunesCustomModalDialog`): "iTunes could not restore the iPhone "Персик " because the password was incorrect." with
+  OK / More Info / Show Log... After OK it goes **back to Welcome**: every retry is Continue again. So a progress box or a
+  running transfer in the first ~15 s is NOT proof the password was right; wait it out.
+- **The alert's buttons** are real Win32 `Button` children (UIA shows them as panes). `BM_CLICK` posted to the button
+  is ignored when the dialog isn't active; posting `WM_COMMAND(BN_CLICKED, id)` to the dialog works in the background.
+- **Right password:** progress box + `AppleMobileBackup.exe` for ~21 min (9.8 GB), then a short `iTunes` modal box that
+  closed by itself, the phone drops out of Devices, and comes back within a minute with `SetupState:
+  RestoredFromiTunesBackup` and its own name. `finder_restore._restore_process_running()` (AppleMobileBackup) and
+  `Run._finish` (setup state) therefore work on Windows unchanged (WD3 "unverified" resolved).
+- Fixtures from the run: `tests/fixtures/itunes/{welcome,wrong_password_alert,library_after_restore}.txt`.
+  `classify` returns "other_sheet" for the wrong-password alert; `_password_rejected` should match its text (check).
+
+**WD2 design, revised by the above:** keep `finder_restore.Run` as the state machine; the `ITunesDriver.snapshot()`
+returns a synthetic "password sheet" snapshot when `itunes_windows()` shows `Enter Password` (no tree read), and the
+wrong-password alert as a sheet with its text; `click("Continue")` goes through the background-thread press;
+"OK" on the alert through `dismiss_wrong_password_alert()`; `heal()` = `start_accessible()`. Run in observe mode first
+(WD7) against the captures above.
+
+**Fix before the next backup:** `backup_runner.post_flight_verification` reports "Backup FAILED" when the only failure
+is an unproven password (first backup on a new computer). Make it "backup complete, prove the password", start the
+helper page itself (`password_tracker.py --exit-on-success`, opens the browser), and continue with the safety copy and
+the backup list once proven. Today that took a manual `iphone_manager._existing_backup_gate(udid)` after the proof.
+
+**Small things noticed:**
+- `finder_restore.announce_backups` / the dry run still say "this Mac" and "Finder" on Windows (`ui-restore` dry run).
+- One run of the suite had `test_backup_manager...test_exact_duplicates_are_proposed_but_the_protected_copy_is_kept`
+  fail once and pass in 4 reruns: probably timing-dependent (ages / mtimes); look before trusting it.
+- Disk: 47 GB free after the first backup + safety copy; a restore adds iTunes' own copies. Propose clean-up first.
+
+**Earlier notes from the same day (kept for detail):**
 
 **State of the Windows test box (probed 2026-11-10, read-only):**
 - Windows 10 IoT Enterprise LTSC 2021 (19044), en-US, no Microsoft Store. NTFS C: with 63.9 GB free.
@@ -94,6 +178,11 @@ clone, `revive.bat` Python probe, `iOSbackup` installs and imports on Windows (n
    backup (iOSbackup proof on Windows), and checks `restorer.py backups` shows the apps.
 3. WD1 captures: Summary is done; still Welcome, backup list, password dialog, wrong-password alert, restoring
    (during the first erase cycle) -> WD2 driver -> WD7.
+
+**From the first Windows backup (2026-11-10, 9.8 GB in ~13 min, 45 apps):** the backup itself was fine but the run
+reported "Backup FAILED" because this PC had no proven password yet (first backup on a new computer). It should say
+"backup complete; prove the password" and start the helper page itself, not "failed". The proof via the helper page +
+iOSbackup then worked on Windows (WE3 done), and the safety copy (robocopy) of 9.8 GB worked.
 
 **Found 2026-11-10 with iTunes installed (changes the WD2 design for the better):**
 - iTunes builds its UI Automation tree ONLY if Windows reports a screen reader when iTunes starts. Started normally it

@@ -338,6 +338,24 @@ class TestUIRecorder(unittest.TestCase):
         self.assertTrue(itunes_restore.is_accessible(self._fixture("library_accessible")))
         self.assertFalse(itunes_restore.is_accessible("WINDOW|||iTunes\nW|||button|||Go to the iTunes Store|||||||||true\n"))
 
+    def test_real_itunes_restore_screens(self):
+        # Captured live 2026-11-10 during the first Windows restore.
+        import finder_restore
+        import itunes_restore
+        welcome = finder_restore.parse_snapshot(self._fixture("welcome"))
+        self.assertEqual(finder_restore.classify(welcome), "welcome")
+        entry = next(i["value"] for i in welcome["items"] if i["cls"] == "pop up button")
+        self.assertTrue(entry.startswith("Персик · main ·"))
+        alert = self._fixture("wrong_password_alert")
+        self.assertIn(itunes_restore.WRONG_PASSWORD_PHRASE, alert)
+        self.assertTrue(finder_restore.parse_snapshot(alert)["has_sheet"])
+
+    def test_never_presses_buttons_that_overwrite_or_wipe(self):
+        import itunes_restore
+        for b in ("Restore Backup", "Restore iPhone…", "Set up as new iPhone", "Back Up Now", "Sync"):
+            with self.assertRaises(itunes_restore.UIError):
+                itunes_restore.press(b)
+
     def test_redact(self):
         import itunes_restore
         self.assertEqual(itunes_restore.redact("W|||button|||Serial Number: F00BA4|||x"),
@@ -351,6 +369,22 @@ class TestUIRecorder(unittest.TestCase):
             self.skipTest("no desktop session")
         self.assertTrue(text.startswith("WINDOW|||"))
         self.assertTrue(any(ln.startswith(("W|||", "S|||")) for ln in text.splitlines()))
+
+
+class TestPasswordAdvice(unittest.TestCase):
+    """AGENTS Rule 1: the remediation text never suggests a password on a command line."""
+
+    def test_remediation_points_at_the_helper_page(self):
+        import contextlib
+        import io
+        import backup_verifier
+        for plat in ("darwin", "win32"):
+            buf = io.StringIO()
+            with mock.patch.object(backup_verifier.sys, "platform", plat), contextlib.redirect_stdout(buf),                     mock.patch("password_tracker.open_keychain_ui", return_value=False):
+                backup_verifier.print_remediation_guide(["PROOF OF PASSWORD REQUIRED: x"], "UDID1", interactive=False)
+            out = buf.getvalue()
+            self.assertNotIn("--password", out)
+            self.assertIn("password_tracker.py --udid UDID1 --exit-on-success", out)
 
 
 @unittest.skipUnless(sys.platform == "win32", "real Windows only")

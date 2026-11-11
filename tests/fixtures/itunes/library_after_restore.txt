@@ -1,0 +1,47 @@
+WINDOW|||iTunes
+W|||button|||Music||||||true|||ITID:1030|||471,194,189,38
+W|||pane|||Music Introduction||||||true|||1315206112|||654,240,1341,821
+W|||button|||Sign in to the iTunes Store||||||true|||2076191376|||1024,689,304,50
+W|||button|||Go to the iTunes Store||||||true|||2076173904|||741,689,265,50
+W|||static text|||Songs and videos you add to iTunes appear in your music library. Your music purchases in iCloud will also appear whenever you’re signed in to the iTunes Store.||||||true|||1303716752|||741,541,696,88
+W|||static text|||Music||||||true|||1303712640|||741,412,144,75
+W|||pane|||||||||true|||2124693472|||354,240,300,821
+W|||tree|||Library Sidebar|||Albums|||true|||2140022064|||354,240,300,821
+W|||button|||Hide||||||true|||2076169536|||604,458,36,22
+W|||button|||Music Playlists||||||true|||2076200112|||363,453,140,30
+W|||button|||Edit||||||true|||2076160800|||610,246,30,22
+W|||static text|||Library||||||true|||1303589280|||372,245,54,22
+W|||treeitem|||Library, Edit|||0|||true||||||354,240,300,32
+W|||treeitem|||Recently Added|||0|||true||||||354,272,300,36
+W|||treeitem|||Artists|||0|||true||||||354,308,300,36
+W|||treeitem|||Albums|||1|||true||||||354,344,300,36
+W|||treeitem|||Songs|||0|||true||||||354,380,300,36
+W|||treeitem|||Genres|||0|||true||||||354,416,300,36
+W|||treeitem|||Music Playlists, Hide|||0|||true||||||354,452,300,32
+W|||treeitem|||Genius|||0|||true||||||354,484,300,36
+W|||custom|||||||||false||||||
+W|||pane|||||||||true|||2078033488|||954,194,442,38
+W|||radio button|||Store|||0|||true|||1315234032|||1320,194,76,38
+W|||radio button|||Radio|||0|||true|||1315230160|||1238,194,81,38
+W|||radio button|||Browse|||0|||true|||1315226288|||1143,194,94,38
+W|||radio button|||For You|||0|||true|||1315217920|||1045,194,97,38
+W|||radio button|||Library|||1|||true|||1315214048|||954,194,90,38
+W|||button|||Forward||||||false|||ITID:5001|||420,194,42,38
+W|||button|||Back||||||false|||ITID:5000|||381,194,41,38
+W|||text field|||Search||||||true|||2078609680|||1601,99,266,47
+W|||button|||up next||||||true|||ITID:4002|||1516,101,68,46
+W|||group|||LCD section||||||true|||2078429472|||847,90,655,68
+W|||slider|||volume|||100 percent|||true|||ITID:3003|||587,108,165,33
+W|||button|||next||||||false|||ITID:3002|||525,101,45,45
+W|||button|||play||||||false|||ITID:3001|||466,101,45,45
+W|||button|||previous||||||false|||ITID:3000|||407,101,45,45
+W|||menubar|||Application||||||true|||2078771440|||354,158,1641,30
+W|||menu item|||Song||||||true|||2078802112|||457,158,61,30
+W|||menu item|||Help||||||true|||2078786688|||749,158,58,30
+W|||menu item|||Account||||||true|||2078809824|||663,158,86,30
+W|||menu item|||Controls||||||true|||2078805968|||576,158,87,30
+W|||menu item|||View||||||true|||2078794400|||518,158,58,30
+W|||menu item|||Edit||||||true|||2078782832|||406,158,51,30
+W|||menu item|||File||||||true|||2077388224|||359,158,47,30
+W|||custom|||||||||true||||||
+COUNT|||45

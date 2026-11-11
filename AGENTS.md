@@ -437,6 +437,8 @@ a guessed coordinate. The agent should then:
   almost all its controls from UI Automation; never while a backup/restore runs; read-only otherwise, never shows a password) so the captures become the driver's test fixtures. A PC with no iTunes refuses with
   `no_restore_app`, and `revive` / the backup's last lines say "do NOT erase yet". Proven passwords live in Windows
   Credential Manager (`iOS Backup:<UDID>`); there is no Keychain Access to open, so never send the person looking.
+  Before any Windows run, read "HANDOFF: second Windows run" in `TODO.md` (how iTunes behaves; the password box
+  hangs UI Automation; wrong passwords send iTunes back to Welcome; `itunes_restore.py --continue-if/--retry-password/--watch`).
 
 In all cases the escalation stops at the human gate (passcode, encryption password, physical
 erase confirmation).

@@ -256,8 +256,8 @@ def test_backup_password(
 
     raise ProofToolUnavailable(
         "No password-proving tool is installed. Install one of:\n"
-        "  pip3 install iOSbackup   (fast keybag unwrap), or\n"
-        "  pip3 install mvt         (mvt-ios decrypt-backup)\n"
+        f"  {host_words()['python']} dep_installer.py --proof-tool   (iOSbackup: fast keybag unwrap), or\n"
+        f"  {host_words()['python']} -m pip install mvt   (mvt-ios decrypt-backup)\n"
         "Proof of password is required before the phone can be erased."
     )
 
@@ -961,7 +961,7 @@ def launch_web_ui(udid: str, port: int = 8765, exit_on_success: bool = False,
     print("=======================================================")
     print(f"  Target Device:  {udid}")
     print(f"  Web Interface:  {url}")
-    print("  (Only reachable from this Mac, with a one-time session token.)")
+    print(f"  (Only reachable from this {host_words()['computer']}, with a one-time session token.)")
     print("=======================================================\n", flush=True)
     if open_browser:
         webbrowser.open(url)
@@ -1004,11 +1004,11 @@ def launch_cli_interactive(udid: str):
     print("=======================================================\n")
 
     if not proof_tool_available():
-        print("🚨 No password-proving tool installed. Install iOSbackup or mvt:")
-        print("     pip3 install iOSbackup   (or)   pip3 install mvt")
+        print("🚨 No password-proving tool installed. Install one:")
+        print(f"     {host_words()['python']} dep_installer.py --proof-tool   (installs iOSbackup)")
         return
 
-    print("[*] Probing macOS Keychain for stored credentials...")
+    print(f"[*] Probing {host_words()['keychain']} for stored credentials...")
     try:
         kc_ok, kc_pwd, _ = smart_keychain_probe(udid, interactive=True)
     except ProofToolUnavailable as e:
@@ -1040,7 +1040,7 @@ def launch_cli_interactive(udid: str):
                 if ok:
                     print(f"✅ MATCH ({dur:.2f}s)!")
                     store_in_keychain(udid, v)
-                    print("🎉 Winning password found and saved to Keychain.\n")
+                    print(f"🎉 Winning password found and saved to {host_words()['keychain']}.\n")
                     found = True
                     break
             if not found:
@@ -1053,7 +1053,7 @@ def launch_cli_interactive(udid: str):
         if ok:
             print(f"✅ MATCH ({dur:.2f}s)!")
             store_in_keychain(udid, candidate)
-            print("🎉 Winning password confirmed and stored in macOS Keychain.\n")
+            print(f"🎉 Winning password confirmed and stored in {host_words()['keychain']}.\n")
             break
         print(f"❌ fail ({dur:.2f}s)")
 

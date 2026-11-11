@@ -1,0 +1,30 @@
+WINDOW|||iTunes
+W|||button|||Cancel||||||true|||1303017536|||475,785,137,50
+W|||button|||Continue||||||true|||1303026272|||326,785,137,50
+W|||static text|||Last Backed Up: Today 2:27 PM||||||true|||2138637344|||602,691,427,22
+W|||pop up button||||||Персик · main · Nov 10, 2:27 PM|||true|||2134047296|||587,647,317,32
+W|||radio button|||Restore from this backup:|||1|||true|||2130780240|||326,647,249,27
+W|||radio button|||Set up as new iPhone|||0|||true|||2129651472|||326,585,213,27
+W|||static text|||Would you like to set up this iPhone as a new iPhone or restore all of your information from a previous backup?||||||true|||2138575664|||326,425,710,59
+W|||static text|||Welcome to Your New iPhone||||||true|||2138604448|||326,359,710,48
+W|||pane|||||||||true|||2078033488|||961,140,91,38
+W|||radio button|||iPhone|||1|||true|||2139074624|||961,140,91,38
+W|||button|||Forward||||||false|||ITID:5001|||252,140,42,38
+W|||button|||Back||||||false|||ITID:5000|||213,140,41,38
+W|||text field|||Search||||||true|||2078609680|||1433,45,266,47
+W|||button|||up next||||||true|||ITID:4002|||1348,47,68,46
+W|||group|||LCD section||||||true|||2078429472|||679,36,655,68
+W|||slider|||volume|||100 percent|||true|||ITID:3003|||419,54,165,33
+W|||button|||next||||||false|||ITID:3002|||357,47,45,45
+W|||button|||play||||||false|||ITID:3001|||298,47,45,45
+W|||button|||previous||||||false|||ITID:3000|||239,47,45,45
+W|||menubar|||Application||||||true|||2078771440|||186,104,1641,30
+W|||menu item|||Song||||||true|||2078802112|||289,104,61,30
+W|||menu item|||Help||||||true|||2078786688|||581,104,58,30
+W|||menu item|||Account||||||true|||2078809824|||495,104,86,30
+W|||menu item|||Controls||||||true|||2078805968|||408,104,87,30
+W|||menu item|||View||||||true|||2078794400|||350,104,58,30
+W|||menu item|||Edit||||||true|||2078782832|||238,104,51,30
+W|||menu item|||File||||||true|||2077388224|||191,104,47,30
+W|||custom|||||||||true||||||
+COUNT|||28

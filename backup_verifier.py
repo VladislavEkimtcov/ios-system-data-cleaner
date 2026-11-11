@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from common import (
+    host_words,
     ARCHIVE_SUFFIX,
     GB,
     backup_root,
@@ -222,7 +223,7 @@ def check_proof_of_password(
     if not password_tracker.proof_tool_available():
         return False, (
             "No password-proving tool installed (need iOSbackup or mvt-ios). "
-            "Install one: pip3 install iOSbackup  (or)  pip3 install mvt"
+            f"Install one: {host_words()['python']} dep_installer.py --proof-tool  (installs iOSbackup)"
         )
 
     # 1. Candidate argument
@@ -278,14 +279,14 @@ def print_remediation_guide(
     has_db_missing = any("Manifest.db" in f for f in failures)
 
     if has_pwd_failure:
+        py = host_words()["python"]
         print("     [Action: Prove Backup Encryption Password]")
-        print("     1. Test candidate password cryptographically against the keybag:")
-        print(f"        python3 iphone_manager.py verify --udid {udid} --password \"<YOUR_PASSWORD>\"")
-        print("     2. Or run interactive password hunter to test variants or inspect history:")
-        print(f"        python3 iphone_manager.py passwords --udid {udid} --cli")
+        print("     1. Open the password helper page (it tries what you remember and common variations, and saves the")
+        print(f"        right one to the {host_words()['keychain']}; never type the password on a command line):")
+        print(f"        {py} password_tracker.py --udid {udid} --exit-on-success")
+        print("     2. Or the same in the terminal (hidden prompt, variants, history):")
+        print(f"        {py} iphone_manager.py passwords --udid {udid} --cli")
         if sys.platform != "darwin":
-            print("     3. Or open the password helper page (tries what you remember and common variations):")
-            print(f"        python password_tracker.py --udid {udid} --exit-on-success")
             print("        (Windows Credential Manager never shows a saved backup password, so there is nothing to look up.)")
         else:
             print("     3. Or inspect stored passwords in macOS Keychain Access:")

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backup_picker import _DATE_SUFFIX
-from common import backup_root, connected_udids, ensure_utf8_console, state_path, backup_device_name
+from common import backup_root, connected_udids, ensure_utf8_console, host_words, state_path, backup_device_name
 
 SEP = " · "          # middle dot
 ORIG_KEY = "Original Device Name"
@@ -214,7 +214,7 @@ def ensure_labels(udid: Optional[str], say=print, apply_changes: bool = True) ->
         if not todo:
             return {"ok": True, "changed": 0, "message": "backup labels already up to date"}
         verb = "Relabelled" if apply_changes else "Would relabel"
-        msg = f"{verb} {len(todo)} backup(s) so they show distinctly in Finder: " + "; ".join(r["target"] for r in todo[:3]) \
+        msg = f"{verb} {len(todo)} backup(s) so they show distinctly in {host_words()['app']}: " + "; ".join(r["target"] for r in todo[:3]) \
               + ("..." if len(todo) > 3 else "")
         say(f"LABELS: {msg}")
         return {"ok": True, "changed": len(todo), "message": msg}
