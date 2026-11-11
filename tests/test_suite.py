@@ -126,14 +126,24 @@ class TestTokenSaver(unittest.TestCase):
 
 class TestSimulatorBridge(unittest.TestCase):
     def test_list_simulators(self):
-        from simulator_bridge import check_simctl_available, list_simulators
-        if check_simctl_available():
-            sims = list_simulators(only_available=True, compact=True)
-            self.assertIsInstance(sims, list)
-            if sims:
-                self.assertIn("udid", sims[0])
-                self.assertIn("name", sims[0])
-                self.assertIn("state", sims[0])
+        # Hermetic: a recorded `simctl list --json devices` answer. The real xcrun on CI runners can hang past
+        # the 15 s timeout (macos-latest, 2026-11-10), which made this test fail for reasons unrelated to the code.
+        import json
+        from unittest import mock
+        import simulator_bridge
+        answer = {"devices": {"com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+            {"udid": "SIM-1", "name": "iPhone 16", "state": "Booted", "isAvailable": True,
+             "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-16"},
+            {"udid": "SIM-2", "name": "iPhone SE", "state": "Shutdown", "isAvailable": False,
+             "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-SE"},
+        ]}}
+        with mock.patch.object(simulator_bridge, "check_simctl_available", return_value=True), \
+             mock.patch.object(simulator_bridge.subprocess, "run",
+                               return_value=mock.Mock(stdout=json.dumps(answer))) as run:
+            sims = simulator_bridge.list_simulators(only_available=True, compact=True)
+        self.assertEqual(run.call_args[0][0], ["xcrun", "simctl", "list", "--json", "devices"])
+        self.assertEqual([s["udid"] for s in sims], ["SIM-1"])   # the unavailable one is dropped
+        self.assertEqual((sims[0]["name"], sims[0]["state"], sims[0]["runtime"]), ("iPhone 16", "Booted", "iOS-18-0"))
 
     def test_extract_media(self):
         from simulator_bridge import extract_media_from_backup
